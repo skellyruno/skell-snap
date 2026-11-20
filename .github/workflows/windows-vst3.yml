@@ -22,7 +22,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Extract submitted Skell-Snap source
         shell: pwsh
@@ -45,7 +45,7 @@ jobs:
       - name: Configure portable DSP tests
         shell: pwsh
         run: |
-          cmake -S "$env:SKELL_SNAP_SOURCE" -B build-core -DSNAP_BUILD_PLUGIN=OFF -DSNAP_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release
+          cmake -S "$env:SKELL_SNAP_SOURCE" -B build-core -DSNAP_BUILD_PLUGIN=OFF -DSNAP_BUILD_TESTS=ON
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build and run portable DSP tests
@@ -64,13 +64,14 @@ jobs:
       - name: Configure JUCE VST3
         shell: pwsh
         run: |
-          cmake -S "$env:SKELL_SNAP_SOURCE" -B build -DSNAP_BUILD_PLUGIN=ON -DSNAP_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake -S "$env:SKELL_SNAP_SOURCE" -B build -DSNAP_BUILD_PLUGIN=ON -DSNAP_BUILD_TESTS=OFF
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Build Windows VST3
+      # Build the VST3 target explicitly; do not build JUCE's Standalone target.
+      - name: Build Windows VST3 only
         shell: pwsh
         run: |
-          cmake --build build --config Release --parallel 2
+          cmake --build build --target SkellSnap_VST3 --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify VST3 bundle, moduleinfo, class IDs and AMD64 PE
