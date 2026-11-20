@@ -10,13 +10,19 @@ on:
 permissions:
   contents: read
 
+# Only superseded PR builds may be cancelled. Main-branch and manual builds
+# remain protected so a release or owner-requested verification is not stopped.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   windows-vst3:
     name: DSP tests + Windows VST3
     runs-on: windows-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Extract submitted Skell-Snap source
         shell: pwsh
@@ -32,9 +38,23 @@ jobs:
           }
           "SKELL_SNAP_SOURCE=$sourceRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
 
+      - name: Patch and test the extracted source program name
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File scripts/patch-skell-snap-program-name.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File scripts/patch-skell-snap-program-name.ps1 -SourceRoot $env:SKELL_SNAP_SOURCE
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Test VST3 release verifier
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/verify-vst3-bundle.ps1 -SelfTest
+
       - name: Configure portable DSP tests
         shell: pwsh
-        run: cmake -S "$env:SKELL_SNAP_SOURCE" -B build-core -DSNAP_BUILD_PLUGIN=OFF -DSNAP_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release
+        run: |
+          cmake -S "$env:SKELL_SNAP_SOURCE" -B build-core -DSNAP_BUILD_PLUGIN=OFF -DSNAP_BUILD_TESTS=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build and run portable DSP tests
         shell: pwsh
@@ -51,29 +71,43 @@ jobs:
 
       - name: Configure JUCE VST3
         shell: pwsh
-        run: cmake -S "$env:SKELL_SNAP_SOURCE" -B build -DSNAP_BUILD_PLUGIN=ON -DSNAP_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release
+        run: |
+          cmake -S "$env:SKELL_SNAP_SOURCE" -B build -DSNAP_BUILD_PLUGIN=ON -DSNAP_BUILD_TESTS=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Build Windows VST3
-        shell: pwsh
-        run: cmake --build build --config Release --parallel 2
-
-      - name: Verify VST3 bundle and binary
+      # Build the VST3 target explicitly; do not build JUCE's Standalone target.
+      - name: Build Windows VST3 only
         shell: pwsh
         run: |
-          $bundle = Join-Path $PWD 'build/SkellSnap_artefacts/Release/VST3/Skell-Snap.vst3'
-          if (-not (Test-Path $bundle -PathType Container)) {
-            Get-ChildItem -Path build -Recurse -ErrorAction SilentlyContinue | Select-Object -First 200 FullName
-            throw "The Skell-Snap VST3 bundle was not produced"
-          }
-          $binary = Get-ChildItem -Path $bundle -Recurse -File |
-            Where-Object { $_.FullName -match 'x86_64-win' -and $_.Extension -eq '.vst3' } |
-            Select-Object -First 1
-          if (-not $binary) { throw "The Windows x86_64 VST3 binary is missing from the bundle" }
-          Write-Host "Verified VST3 binary: $($binary.FullName)"
+          cmake --build build --target SkellSnap_VST3 --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Upload Windows VST3
-        uses: actions/upload-artifact@v4
+      - name: Verify VST3 bundle, moduleinfo, class IDs and AMD64 PE
+        shell: pwsh
+        run: |
+          $vst3Root = Join-Path $PWD 'build/SkellSnap_artefacts/Release/VST3'
+          pwsh -NoProfile -File scripts/verify-vst3-bundle.ps1 -Vst3Root $vst3Root -ExpectedBundleName 'Skell-Snap.vst3' -CommitSha $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Validate VST3 with pluginval
+        uses: Tracktion/pluginval/validate@v2.0.0-beta3
+        with:
+          plugins: build/SkellSnap_artefacts/Release/VST3/Skell-Snap.vst3
+          strictness-level: 5
+          pluginval-version: v2.0.0-beta3
+
+      # Public-repository artifacts are readable by the public. Keep the
+      # installable preview private until the owner chooses a private delivery path.
+      - name: Upload Windows VST3 preview (private repositories only)
+        if: ${{ github.event.repository.private == true }}
+        uses: actions/upload-artifact@v6
         with:
           name: Skell-Snap-windows-latest
           path: build/SkellSnap_artefacts/Release/VST3
           if-no-files-found: error
+          retention-days: 7
+
+      - name: Withhold installable artifact from public repository
+        if: ${{ github.event.repository.private != true }}
+        shell: pwsh
+        run: Write-Host 'Installable VST3 artifact withheld because this repository is public. Build and bundle verification completed; no public product download was created.'
