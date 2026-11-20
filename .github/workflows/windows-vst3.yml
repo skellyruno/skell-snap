@@ -22,7 +22,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Extract submitted Skell-Snap source
         shell: pwsh
@@ -81,11 +81,18 @@ jobs:
           pwsh -NoProfile -File scripts/verify-vst3-bundle.ps1 -Vst3Root $vst3Root -ExpectedBundleName 'Skell-Snap.vst3' -CommitSha $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Validate VST3 with pluginval
+        uses: Tracktion/pluginval/validate@v2.0.0-beta3
+        with:
+          plugins: build/SkellSnap_artefacts/Release/VST3/Skell-Snap.vst3
+          strictness-level: 5
+          pluginval-version: v2.0.0-beta3
+
       # Public-repository artifacts are readable by the public. Keep the
       # installable preview private until the owner chooses a private delivery path.
       - name: Upload Windows VST3 preview (private repositories only)
         if: ${{ github.event.repository.private == true }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: Skell-Snap-windows-latest
           path: build/SkellSnap_artefacts/Release/VST3
