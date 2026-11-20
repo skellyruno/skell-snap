@@ -1,0 +1,79 @@
+name: Windows VST3
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  windows-vst3:
+    name: DSP tests + Windows VST3
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Extract submitted Skell-Snap source
+        shell: pwsh
+        run: |
+          $archive = Join-Path $PWD 'source-archive/skell-snap.zip'
+          if (-not (Test-Path $archive -PathType Leaf)) {
+            throw "Source archive is missing: $archive"
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $PWD 'source') -Force
+          $sourceRoot = Join-Path $PWD 'source/skell-snap'
+          if (-not (Test-Path (Join-Path $sourceRoot 'CMakeLists.txt'))) {
+            throw "The archive did not contain source/skell-snap/CMakeLists.txt"
+          }
+          "SKELL_SNAP_SOURCE=$sourceRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Configure portable DSP tests
+        shell: pwsh
+        run: cmake -S "$env:SKELL_SNAP_SOURCE" -B build-core -DSNAP_BUILD_PLUGIN=OFF -DSNAP_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build and run portable DSP tests
+        shell: pwsh
+        run: |
+          cmake --build build-core --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $testExe = Join-Path $PWD 'build-core/Release/SnapCoreTests.exe'
+          if (-not (Test-Path $testExe)) {
+            $testExe = Join-Path $PWD 'build-core/SnapCoreTests.exe'
+          }
+          if (-not (Test-Path $testExe)) { throw "SnapCoreTests.exe was not produced" }
+          & $testExe --quick
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Configure JUCE VST3
+        shell: pwsh
+        run: cmake -S "$env:SKELL_SNAP_SOURCE" -B build -DSNAP_BUILD_PLUGIN=ON -DSNAP_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Windows VST3
+        shell: pwsh
+        run: cmake --build build --config Release --parallel 2
+
+      - name: Verify VST3 bundle and binary
+        shell: pwsh
+        run: |
+          $bundle = Join-Path $PWD 'build/SkellSnap_artefacts/Release/VST3/Skell-Snap.vst3'
+          if (-not (Test-Path $bundle -PathType Container)) {
+            Get-ChildItem -Path build -Recurse -ErrorAction SilentlyContinue | Select-Object -First 200 FullName
+            throw "The Skell-Snap VST3 bundle was not produced"
+          }
+          $binary = Get-ChildItem -Path $bundle -Recurse -File |
+            Where-Object { $_.FullName -match 'x86_64-win' -and $_.Extension -eq '.vst3' } |
+            Select-Object -First 1
+          if (-not $binary) { throw "The Windows x86_64 VST3 binary is missing from the bundle" }
+          Write-Host "Verified VST3 binary: $($binary.FullName)"
+
+      - name: Upload Windows VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: Skell-Snap-windows-latest
+          path: build/SkellSnap_artefacts/Release/VST3
+          if-no-files-found: error
