@@ -86,7 +86,7 @@ jobs:
         shell: pwsh
         run: |
           $vst3Root = Join-Path $PWD 'build/SkellSnap_artefacts/Release/VST3'
-          pwsh -NoProfile -File scripts/verify-vst3-bundle.ps1 -Vst3Root $vst3Root -ExpectedBundleName 'Skell-Snap.vst3' -CommitSha $env:GITHUB_SHA
+          pwsh -NoProfile -File scripts/verify-vst3-bundle.ps1 -Vst3Root $vst3Root -ExpectedBundleName 'Skell-Snap.vst3' -CommitSha $env:GITHUB_SHA -SourceArchivePath 'source-archive/skell-snap.zip' -SourceOverlayPath 'scripts/patch-skell-snap-program-name.ps1'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Validate VST3 with pluginval

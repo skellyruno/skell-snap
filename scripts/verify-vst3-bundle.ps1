@@ -3,6 +3,8 @@ param(
     [string]$Vst3Root,
     [string]$ExpectedBundleName = 'Skell-Snap.vst3',
     [string]$CommitSha = $env:GITHUB_SHA,
+    [string]$SourceArchivePath,
+    [string]$SourceOverlayPath,
     [switch]$SelfTest
 )
 
@@ -70,7 +72,9 @@ function Invoke-VerifyVst3Bundle {
     param(
         [Parameter(Mandatory)][string]$Root,
         [Parameter(Mandatory)][string]$ExpectedName,
-        [string]$SourceCommit
+        [string]$SourceCommit,
+        [Parameter(Mandatory)][string]$SourceArchivePath,
+        [Parameter(Mandatory)][string]$SourceOverlayPath
     )
 
     if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
@@ -78,6 +82,19 @@ function Invoke-VerifyVst3Bundle {
     }
 
     $resolvedRoot = (Resolve-Path -LiteralPath $Root).Path
+    foreach ($inputPath in @($SourceArchivePath, $SourceOverlayPath)) {
+        if ([string]::IsNullOrWhiteSpace($inputPath) -or
+            -not (Test-Path -LiteralPath $inputPath -PathType Leaf)) {
+            throw "Required release source input is missing: $inputPath"
+        }
+        if ((Get-Item -LiteralPath $inputPath).Length -le 0) {
+            throw "Required release source input is empty: $inputPath"
+        }
+    }
+    $sourceArchiveInfo = Get-Item -LiteralPath $SourceArchivePath
+    $sourceOverlayInfo = Get-Item -LiteralPath $SourceOverlayPath
+    $sourceArchiveHash = (Get-FileHash -LiteralPath $SourceArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $sourceOverlayHash = (Get-FileHash -LiteralPath $SourceOverlayPath -Algorithm SHA256).Hash.ToLowerInvariant()
     $bundles = @(Get-ChildItem -LiteralPath $resolvedRoot -Directory -Filter '*.vst3')
     if ($bundles.Count -ne 1) {
         throw "Expected exactly one top-level VST3 bundle; found $($bundles.Count)"
@@ -168,6 +185,12 @@ function Invoke-VerifyVst3Bundle {
         platform = 'windows'
         architecture = 'x86_64'
         sourceCommit = $resolvedCommit
+        sourceArchivePath = $SourceArchivePath.Replace('\', '/')
+        sourceArchiveSizeBytes = [long]$sourceArchiveInfo.Length
+        sourceArchiveSha256 = $sourceArchiveHash
+        sourceOverlayPath = $SourceOverlayPath.Replace('\', '/')
+        sourceOverlaySizeBytes = [long]$sourceOverlayInfo.Length
+        sourceOverlaySha256 = $sourceOverlayHash
         modulePath = $relativeBinaryPath
         moduleSizeBytes = [long]$binary.Length
         moduleSha256 = $binaryHash
@@ -258,12 +281,25 @@ function Invoke-SelfTest {
     New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
 
     try {
+        $inputRoot = Join-Path $tempRoot 'source-inputs'
+        New-Item -ItemType Directory -Path $inputRoot -Force | Out-Null
+        $sourceArchiveFixture = Join-Path $inputRoot 'skell-snap-source.zip'
+        $sourceOverlayFixture = Join-Path $inputRoot 'patch-program-name.ps1'
+        Write-Utf8NoBom -Path $sourceArchiveFixture -Content 'self-test source archive bytes'
+        Write-Utf8NoBom -Path $sourceOverlayFixture -Content 'self-test source overlay bytes'
+
         $validRoot = Join-Path $tempRoot 'valid'
         New-Item -ItemType Directory -Path $validRoot -Force | Out-Null
         New-TestBundle -Root $validRoot
-        $manifest = Invoke-VerifyVst3Bundle -Root $validRoot -ExpectedName 'Skell-Snap.vst3' -SourceCommit 'self-test'
+        $manifest = Invoke-VerifyVst3Bundle -Root $validRoot -ExpectedName 'Skell-Snap.vst3' -SourceCommit 'self-test' -SourceArchivePath $sourceArchiveFixture -SourceOverlayPath $sourceOverlayFixture
         if ($manifest.moduleSizeBytes -ne 128) {
             throw 'Verifier self-test failed: valid AMD64 fixture size was not recorded.'
+        }
+        $expectedArchiveHash = (Get-FileHash -LiteralPath $sourceArchiveFixture -Algorithm SHA256).Hash.ToLowerInvariant()
+        $expectedOverlayHash = (Get-FileHash -LiteralPath $sourceOverlayFixture -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($manifest.sourceArchiveSha256 -ne $expectedArchiveHash -or
+            $manifest.sourceOverlaySha256 -ne $expectedOverlayHash) {
+            throw 'Verifier self-test failed: source archive/overlay hashes were not recorded accurately.'
         }
         if (-not (Test-Path -LiteralPath (Join-Path $validRoot 'release-manifest.json'))) {
             throw 'Verifier self-test failed: release manifest was not written.'
@@ -272,18 +308,25 @@ function Invoke-SelfTest {
             throw 'Verifier self-test failed: SHA256SUMS was not written.'
         }
 
+        Assert-Rejected -Scenario 'missing source archive' -Action {
+            Invoke-VerifyVst3Bundle -Root $validRoot -ExpectedName 'Skell-Snap.vst3' -SourceCommit 'self-test' -SourceArchivePath (Join-Path $inputRoot 'missing.zip') -SourceOverlayPath $sourceOverlayFixture
+        }
+        Assert-Rejected -Scenario 'missing source overlay' -Action {
+            Invoke-VerifyVst3Bundle -Root $validRoot -ExpectedName 'Skell-Snap.vst3' -SourceCommit 'self-test' -SourceArchivePath $sourceArchiveFixture -SourceOverlayPath (Join-Path $inputRoot 'missing.ps1')
+        }
+
         $duplicateRoot = Join-Path $tempRoot 'duplicate-class'
         New-Item -ItemType Directory -Path $duplicateRoot -Force | Out-Null
         New-TestBundle -Root $duplicateRoot -DuplicateClassId
         Assert-Rejected -Scenario 'duplicate class IDs' -Action {
-            Invoke-VerifyVst3Bundle -Root $duplicateRoot -ExpectedName 'Skell-Snap.vst3' -SourceCommit 'self-test'
+            Invoke-VerifyVst3Bundle -Root $duplicateRoot -ExpectedName 'Skell-Snap.vst3' -SourceCommit 'self-test' -SourceArchivePath $sourceArchiveFixture -SourceOverlayPath $sourceOverlayFixture
         }
 
         $wrongArchRoot = Join-Path $tempRoot 'wrong-architecture'
         New-Item -ItemType Directory -Path $wrongArchRoot -Force | Out-Null
         New-TestBundle -Root $wrongArchRoot -Machine 0x014c
         Assert-Rejected -Scenario 'non-AMD64 PE binary' -Action {
-            Invoke-VerifyVst3Bundle -Root $wrongArchRoot -ExpectedName 'Skell-Snap.vst3' -SourceCommit 'self-test'
+            Invoke-VerifyVst3Bundle -Root $wrongArchRoot -ExpectedName 'Skell-Snap.vst3' -SourceCommit 'self-test' -SourceArchivePath $sourceArchiveFixture -SourceOverlayPath $sourceOverlayFixture
         }
 
         $duplicateBundleRoot = Join-Path $tempRoot 'duplicate-bundle'
@@ -291,7 +334,7 @@ function Invoke-SelfTest {
         New-TestBundle -Root $duplicateBundleRoot
         New-Item -ItemType Directory -Path (Join-Path $duplicateBundleRoot 'Extra.vst3') -Force | Out-Null
         Assert-Rejected -Scenario 'duplicate top-level bundles' -Action {
-            Invoke-VerifyVst3Bundle -Root $duplicateBundleRoot -ExpectedName 'Skell-Snap.vst3' -SourceCommit 'self-test'
+            Invoke-VerifyVst3Bundle -Root $duplicateBundleRoot -ExpectedName 'Skell-Snap.vst3' -SourceCommit 'self-test' -SourceArchivePath $sourceArchiveFixture -SourceOverlayPath $sourceOverlayFixture
         }
 
         Write-Host 'PASS: VST3 verifier accepts a valid AMD64 bundle and rejects duplicate CIDs, wrong PE architecture, and duplicate bundles.'
@@ -310,4 +353,4 @@ if ([string]::IsNullOrWhiteSpace($Vst3Root)) {
     throw 'Vst3Root is required unless -SelfTest is specified.'
 }
 
-Invoke-VerifyVst3Bundle -Root $Vst3Root -ExpectedName $ExpectedBundleName -SourceCommit $CommitSha | Out-Null
+Invoke-VerifyVst3Bundle -Root $Vst3Root -ExpectedName $ExpectedBundleName -SourceCommit $CommitSha -SourceArchivePath $SourceArchivePath -SourceOverlayPath $SourceOverlayPath | Out-Null
