@@ -6,9 +6,9 @@ It reconstructs the source tree from `source-archive/skell-snap.zip`, runs the p
 
 ## Release verification
 
-After the build, `scripts/verify-vst3-bundle.ps1` checks the VST3 bundle structure, strict JSON metadata, non-empty and unique class IDs, the single Windows x64 module, and the PE AMD64 machine signature. It writes a release manifest and SHA-256 checksum file beside the bundle.
+After the build, `scripts/verify-vst3-bundle.ps1` checks the VST3 bundle structure, strict JSON metadata, non-empty and unique class IDs, the single Windows x64 module, and the PE AMD64 machine signature. It also hashes the preserved source ZIP and the exact PowerShell overlay applied to that source, then records both input paths, sizes, and SHA-256 values alongside the compiled module hash in the release manifest.
 
-The verifier's `-SelfTest` mode exercises valid output and rejects duplicate class IDs, duplicate bundles, and non-AMD64 PE files. The workflow also self-tests and applies a minimal patch to the extracted `Source/PluginProcessor.h` so the one default program reports the non-empty name `Default`; the archived source ZIP is not overwritten.
+The verifier's `-SelfTest` mode exercises valid output, verifies the recorded source-input hashes, and rejects duplicate class IDs, duplicate bundles, non-AMD64 PE files, and missing source inputs. The workflow also self-tests and applies a minimal patch to the extracted `Source/PluginProcessor.h` so the one default program reports the non-empty name `Default`; the archived source ZIP is not overwritten.
 
 ## Artifact visibility
 

@@ -19,9 +19,9 @@ The release verifier checks:
 - Unique VST3 class IDs
 - Exactly one VST3 module under `Contents/x86_64-win`
 - A valid Windows PE header with AMD64 machine type
-- SHA-256 provenance for the module, plus `release-manifest.json` and `SHA256SUMS`
+- SHA-256 provenance for the module, the preserved source ZIP, and the applied program-name overlay, plus `release-manifest.json` and `SHA256SUMS`
 
-The verifier also has a Windows PowerShell self-test covering valid bundles, duplicate class IDs, duplicate bundles, and wrong-architecture PE files. The build applies a narrow, tested source overlay that names the single default program `Default`; the original ZIP remains preserved byte-for-byte.
+The verifier also has a Windows PowerShell self-test covering valid bundles, duplicate class IDs, duplicate bundles, wrong-architecture PE files, missing source inputs, and exact source/overlay SHA-256 recording. The build applies a narrow, tested source overlay that names the single default program `Default`; the original ZIP remains preserved byte-for-byte.
 
 ## Preview artifact policy
 
