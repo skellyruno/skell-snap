@@ -11,30 +11,44 @@ permissions:
   contents: read
 
 # Only superseded PR builds may be cancelled. Main-branch and manual builds
-# remain protected so a release or owner-requested verification is not stopped.
+# remain protected so release or owner-requested verification is not stopped.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   windows-vst3:
-    name: DSP tests + Windows VST3
+    name: DSP compatibility + Windows VST3
     runs-on: windows-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Extract submitted Skell-Snap source
+      - name: Reassemble and verify the source archive
         shell: pwsh
         run: |
-          $archive = Join-Path $PWD 'source-archive/skell-snap.zip'
-          if (-not (Test-Path $archive -PathType Leaf)) {
-            throw "Source archive is missing: $archive"
-          }
-          Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $PWD 'source') -Force
-          $sourceRoot = Join-Path $PWD 'source/skell-snap'
+          pwsh -NoProfile -File scripts/reassemble-source-archive.ps1 -OutputPath (Join-Path $PWD 'source-archive/skell-snap-source.tar.gz')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Extract submitted Skell-Snap source and restore shared assets
+        shell: pwsh
+        run: |
+          $archive = Join-Path $PWD 'source-archive/skell-snap-source.tar.gz'
+          $extractRoot = Join-Path $PWD 'source'
+          New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
+          tar -xzf $archive -C $extractRoot
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $sourceRoot = Join-Path $extractRoot 'skell-snap'
           if (-not (Test-Path (Join-Path $sourceRoot 'CMakeLists.txt'))) {
             throw "The archive did not contain source/skell-snap/CMakeLists.txt"
+          }
+          $assets = Join-Path $PWD 'Assets'
+          if (-not (Test-Path (Join-Path $assets 'fonts/OFL-Montserrat.txt'))) {
+            throw "The shared Skell asset bundle or Montserrat font licence is missing."
+          }
+          Copy-Item -LiteralPath $assets -Destination (Join-Path $sourceRoot 'Assets') -Recurse -Force
+          if (-not (Test-Path (Join-Path $sourceRoot 'Assets/rune_atlas.png'))) {
+            throw "The rune artwork was not restored into the extracted source."
           }
           "SKELL_SNAP_SOURCE=$sourceRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
 
@@ -50,23 +64,18 @@ jobs:
         shell: pwsh
         run: pwsh -NoProfile -File scripts/verify-vst3-bundle.ps1 -SelfTest
 
-      - name: Configure portable DSP tests
+      - name: Configure portable DSP and UI regression tests
         shell: pwsh
         run: |
           cmake -S "$env:SKELL_SNAP_SOURCE" -B build-core -DSNAP_BUILD_PLUGIN=OFF -DSNAP_BUILD_TESTS=ON
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Build and run portable DSP tests
+      - name: Build and run all portable tests (including Classic bit parity)
         shell: pwsh
         run: |
           cmake --build build-core --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $testExe = Join-Path $PWD 'build-core/Release/SnapCoreTests.exe'
-          if (-not (Test-Path $testExe)) {
-            $testExe = Join-Path $PWD 'build-core/SnapCoreTests.exe'
-          }
-          if (-not (Test-Path $testExe)) { throw "SnapCoreTests.exe was not produced" }
-          & $testExe --quick
+          ctest --test-dir build-core -C Release --output-on-failure
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Configure JUCE VST3
@@ -76,7 +85,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # Build the VST3 target explicitly; do not build JUCE's Standalone target.
-      - name: Build Windows VST3 only
+      - name: Build Windows x64 VST3 only
         shell: pwsh
         run: |
           cmake --build build --target SkellSnap_VST3 --config Release --parallel 2
@@ -86,7 +95,7 @@ jobs:
         shell: pwsh
         run: |
           $vst3Root = Join-Path $PWD 'build/SkellSnap_artefacts/Release/VST3'
-          pwsh -NoProfile -File scripts/verify-vst3-bundle.ps1 -Vst3Root $vst3Root -ExpectedBundleName 'Skell-Snap.vst3' -CommitSha $env:GITHUB_SHA -SourceArchivePath 'source-archive/skell-snap.zip' -SourceOverlayPath 'scripts/patch-skell-snap-program-name.ps1'
+          pwsh -NoProfile -File scripts/verify-vst3-bundle.ps1 -Vst3Root $vst3Root -ExpectedBundleName 'Skell-Snap.vst3' -CommitSha $env:GITHUB_SHA -SourceArchivePath 'source-archive/skell-snap-source.tar.gz' -SourceOverlayPath 'scripts/patch-skell-snap-program-name.ps1'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Validate VST3 with pluginval
@@ -96,8 +105,6 @@ jobs:
           strictness-level: 5
           pluginval-version: v2.0.0-beta3
 
-      # Owner-requested public preview: this is the verified VST3 bundle,
-      # not a draft release. Actions artifacts expire after the configured period.
       - name: Upload verified Windows x64 VST3
         uses: actions/upload-artifact@v6
         with:
