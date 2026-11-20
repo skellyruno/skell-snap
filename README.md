@@ -21,7 +21,7 @@ The release verifier checks:
 - A valid Windows PE header with AMD64 machine type
 - SHA-256 provenance for the module, plus `release-manifest.json` and `SHA256SUMS`
 
-The verifier also has a Windows PowerShell self-test covering valid bundles, duplicate class IDs, duplicate bundles, and wrong-architecture PE files.
+The verifier also has a Windows PowerShell self-test covering valid bundles, duplicate class IDs, duplicate bundles, and wrong-architecture PE files. The build applies a narrow, tested source overlay that names the single default program `Default`; the original ZIP remains preserved byte-for-byte.
 
 ## Preview artifact policy
 
