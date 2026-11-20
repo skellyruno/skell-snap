@@ -96,18 +96,12 @@ jobs:
           strictness-level: 5
           pluginval-version: v2.0.0-beta3
 
-      # Public-repository artifacts are readable by the public. Keep the
-      # installable preview private until the owner chooses a private delivery path.
-      - name: Upload Windows VST3 preview (private repositories only)
-        if: ${{ github.event.repository.private == true }}
+      # Owner-requested public preview: this is the verified VST3 bundle,
+      # not a draft release. Actions artifacts expire after the configured period.
+      - name: Upload verified Windows x64 VST3
         uses: actions/upload-artifact@v6
         with:
-          name: Skell-Snap-windows-latest
-          path: build/SkellSnap_artefacts/Release/VST3
+          name: Skell-Snap-Windows-x64-VST3
+          path: build/SkellSnap_artefacts/Release/VST3/Skell-Snap.vst3
           if-no-files-found: error
-          retention-days: 7
-
-      - name: Withhold installable artifact from public repository
-        if: ${{ github.event.repository.private != true }}
-        shell: pwsh
-        run: Write-Host 'Installable VST3 artifact withheld because this repository is public. Build and bundle verification completed; no public product download was created.'
+          retention-days: 30
