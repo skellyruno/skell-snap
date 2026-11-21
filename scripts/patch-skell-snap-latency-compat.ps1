@@ -47,15 +47,15 @@ p.latencyMs = kLat[juce::jlimit(0, 4, int(std::lround(pLat->load(std::memory_ord
     $processor = Repair-ChoiceIndexMapping -ProcessorContent $processor
     Assert-OriginalLatencySelector -ProcessorContent $processor -HeaderContent $header
 
+    $lookup = @(0.0, 1.0, 2.5, 5.0, 10.0)
     $expected = @(0.0, 1.0, 2.5, 5.0, 10.0)
     for ($i = 0; $i -lt 5; $i++) {
-        if ($expected[$i] -ne @($expected)[[Math]::Min(4, [Math]::Max(0, $i))]) {
-            throw "Latency lookup test failed at choice index $i."
+        $rawChoiceValue = [double]$i
+        $rawChoiceIndex = [Math]::Min(4, [Math]::Max(0, [int]($rawChoiceValue + 0.5)))
+        if ([double]$lookup[$rawChoiceIndex] -ne [double]$expected[$i]) {
+            throw "Raw choice-index latency lookup failed at index $i."
         }
     }
-
-    $bad = $processor.Replace($expectedRawIndex, $expectedRawIndex)
-    if ($bad -ne $processor) { throw 'Self-test fixture unexpectedly changed.' }
     $split = $processor + ' zeroLatency pZeroLatency'
     $rejected = $false
     try { Assert-OriginalLatencySelector -ProcessorContent $split -HeaderContent $header }
