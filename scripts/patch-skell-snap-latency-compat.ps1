@@ -51,7 +51,7 @@ p.latencyMs = kLat[juce::jlimit(0, 4, int(std::lround(pLat->load(std::memory_ord
     $expected = @(0.0, 1.0, 2.5, 5.0, 10.0)
     for ($i = 0; $i -lt 5; $i++) {
         $rawChoiceValue = [double]$i
-        $rawChoiceIndex = [Math]::Min(4, [Math]::Max(0, [int]($rawChoiceValue + 0.5)))
+        $rawChoiceIndex = [Math]::Min(4, [Math]::Max(0, [int][Math]::Floor($rawChoiceValue + 0.5)))
         if ([double]$lookup[$rawChoiceIndex] -ne [double]$expected[$i]) {
             throw "Raw choice-index latency lookup failed at index $i."
         }
