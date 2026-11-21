@@ -57,38 +57,43 @@ jobs:
         run: |
           $partRoot = Join-Path $PWD 'source-overlay/parts'
           $parts = @(Get-ChildItem -LiteralPath $partRoot -Filter 'part-*.bin' -File | Sort-Object Name)
-          if ($parts.Count -ne 8) {
-            throw "Expected 8 source overlay fragments, found $($parts.Count)"
-          }
+          if ($parts.Count -ne 8) { throw "Expected 8 source overlay binary slots, found $($parts.Count)" }
           $expectedNames = 1..8 | ForEach-Object { 'part-{0:D2}.bin' -f $_ }
-          for ($i = 0; $i -lt $expectedNames.Count; $i++) {
-            if ($parts[$i].Name -ne $expectedNames[$i]) {
-              throw "Unexpected source overlay order: expected $($expectedNames[$i]), found $($parts[$i].Name)"
-            }
+          for ($i = 0; $i -lt 8; $i++) {
+            if ($parts[$i].Name -ne $expectedNames[$i]) { throw "Unexpected source overlay slot: $($parts[$i].Name)" }
           }
           $overlayPath = Join-Path $PWD 'source-overlay.tar.gz'
           $stream = [System.IO.File]::Open($overlayPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
           try {
-            foreach ($part in $parts) {
-              $bytes = [System.IO.File]::ReadAllBytes($part.FullName)
+            for ($index = 1; $index -le 8; $index++) {
+              $partName = 'part-{0:D2}.bin' -f $index
+              if ($index -eq 6 -or $index -eq 8) {
+                $b64Name = 'part-{0:D2}.b64' -f $index
+                $b64Path = Join-Path $PWD ('source-overlay/parts-b64/' + $b64Name)
+                if (-not (Test-Path -LiteralPath $b64Path -PathType Leaf)) { throw "Missing verified base64 overlay fragment: $b64Name" }
+                $expectedB64Hash = if ($index -eq 6) { '4f990f29c3c90fa4a3cf642d2b66df6bf8d124218cee92bfe73568e7a532a4c3' } else { 'cdd519f9ef0955a06cd939e161006f3d76b2c392f5d808387c00ec80714a72dc' }
+                $actualB64Hash = (Get-FileHash -LiteralPath $b64Path -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($actualB64Hash -ne $expectedB64Hash) { throw "Base64 overlay fragment checksum mismatch for $b64Name: $actualB64Hash" }
+                $base64 = [System.IO.File]::ReadAllText($b64Path)
+                $bytes = [Convert]::FromBase64String($base64)
+                $expectedPartLength = if ($index -eq 6) { 4993 } else { 4992 }
+                if ($bytes.Length -ne $expectedPartLength) { throw "Decoded overlay fragment $b64Name has $($bytes.Length) bytes; expected $expectedPartLength" }
+              } else {
+                $bytes = [System.IO.File]::ReadAllBytes((Join-Path $partRoot $partName))
+              }
               $stream.Write($bytes, 0, $bytes.Length)
             }
           }
           finally { $stream.Dispose() }
-          $expectedLength = 16741
+          $expectedLength = 39943
           $actualLength = (Get-Item -LiteralPath $overlayPath).Length
-          if ($actualLength -ne $expectedLength) {
-            throw "Source overlay length mismatch: expected $expectedLength, got $actualLength"
-          }
-          $expectedSha256 = 'ab0e2aa6a575334e491ccf86e5623b416f0e804645d148598a9de890ddcc5a7f'
+          if ($actualLength -ne $expectedLength) { throw "Source overlay length mismatch: expected $expectedLength, got $actualLength" }
+          $expectedSha256 = 'ce1f4c42e89d82d10241a97f0ccb002abc8cd6e88a9907fd8f6012c67a9d5a9f'
           $actualSha256 = (Get-FileHash -LiteralPath $overlayPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actualSha256 -ne $expectedSha256) {
-            throw "Source overlay SHA-256 mismatch: expected $expectedSha256, got $actualSha256"
-          }
+          if ($actualSha256 -ne $expectedSha256) { throw "Source overlay SHA-256 mismatch: expected $expectedSha256, got $actualSha256" }
           tar -tzf $overlayPath | Out-Null
           if ($LASTEXITCODE -ne 0) { throw 'Verified source overlay is not a readable gzip tar archive.' }
           Write-Host "Source overlay reconstructed and SHA-256 verified: $actualSha256 ($actualLength bytes)"
-
       - name: Apply updated audio-reactive UI/source overlay
         shell: pwsh
         run: |
