@@ -73,7 +73,7 @@ jobs:
                 if (-not (Test-Path -LiteralPath $b64Path -PathType Leaf)) { throw "Missing verified base64 overlay fragment: $b64Name" }
                 $expectedB64Hash = if ($index -eq 6) { '4f990f29c3c90fa4a3cf642d2b66df6bf8d124218cee92bfe73568e7a532a4c3' } else { 'cdd519f9ef0955a06cd939e161006f3d76b2c392f5d808387c00ec80714a72dc' }
                 $actualB64Hash = (Get-FileHash -LiteralPath $b64Path -Algorithm SHA256).Hash.ToLowerInvariant()
-                if ($actualB64Hash -ne $expectedB64Hash) { throw "Base64 overlay fragment checksum mismatch for $b64Name: $actualB64Hash" }
+                if ($actualB64Hash -ne $expectedB64Hash) { throw "Base64 overlay fragment checksum mismatch for ${b64Name}: $actualB64Hash" }
                 $base64 = [System.IO.File]::ReadAllText($b64Path)
                 $bytes = [Convert]::FromBase64String($base64)
                 $expectedPartLength = if ($index -eq 6) { 4993 } else { 4992 }
