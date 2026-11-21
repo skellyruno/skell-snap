@@ -103,6 +103,14 @@ jobs:
             throw "The reversed Retune scale helper was not applied."
           }
 
+      - name: Upload reconstructed source for local DSP/UI profiling
+        uses: actions/upload-artifact@v6
+        with:
+          name: Skell-Snap-Source-Recovery
+          path: ${{ env.SKELL_SNAP_SOURCE }}
+          if-no-files-found: error
+          retention-days: 3
+
       - name: Verify legacy latency values and append Zero safely
         shell: pwsh
         run: |
