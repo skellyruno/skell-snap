@@ -14,7 +14,7 @@ The Windows job then configures JUCE 8.0.12, builds **SkellSnap_VST3 only**, val
 
 ## Latency and Retune controls
 
-The Latency menu is restored to the original five choices: Zero first, then 1 / 2.5 / 5 / 10 ms, with 2.5 ms default. The AudioParameterChoice normalized value maps to the five-entry DSP lookup table; no separate `zeroLatency` Boolean is used.
+The Latency menu is restored to the original five choices: Zero first, then 1 / 2.5 / 5 / 10 ms, with 2.5 ms default. The AudioParameterChoice raw value is the integer choice index (0–4), and the DSP maps that index directly to `kLat[5]`; no normalized-value multiplier or separate `zeroLatency` Boolean is used.
 
 The Retune dial reads 100 at the left down to 0 at the right. Clockwise movement lowers stored milliseconds, and 0 ms is hardest / instant correction. The unchanged tuning engine receives the same original 0–500 ms Retune value. The JUCE rotary angles are offset to align JUCE's top-origin coordinates with the artwork's 3-o'clock-origin arc.
 
