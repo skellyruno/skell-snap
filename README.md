@@ -34,7 +34,7 @@ Close and reopen the DAW, then rescan VST3 plug-ins. The ZIP contains the actual
 
 ## Verification
 
-The portable suite includes DSP correctness, 80-combination Classic compatibility, rune motion/audio-activity, glyph catalogue and UI frame-pacer tests. The Windows workflow reconstructs and SHA-256 verifies the base source archive, applies the shared artwork/font assets and source overlay, checks the latency compatibility patch, builds JUCE 8.0.12 Windows x64 VST3 only, validates the bundle/AMD64 module, runs pluginval strictness 5, and creates + inspects the installer ZIP contents.
+The portable suite includes DSP correctness, 80-combination Classic compatibility, rune motion/audio-activity, glyph catalogue and UI frame-pacer tests. The Windows workflow reconstructs and SHA-256 verifies the base source archive and a separate eight-fragment UI overlay (16,741 bytes; SHA-256 `ab0e2aa6a575334e491ccf86e5623b416f0e804645d148598a9de890ddcc5a7f`). It restores the shared artwork/font assets, checks the latency compatibility patch, builds JUCE 8.0.12 Windows x64 VST3 only, validates the bundle/AMD64 module, runs pluginval strictness 5, and creates + inspects the installer ZIP contents.
 
 Synthetic benchmarks characterize detector and timing behaviour; they are not recorded-vocal A/B listening tests. Automated CI also does not replace installing/scanning/loading in FL Studio, state recall and automation checks, listening to real vocals, or measuring callback CPU, glitches and device latency. Those host checks remain outstanding.
 

@@ -4,7 +4,7 @@ The Windows VST3 workflow runs for pushes to `main`, pull requests targeting `ma
 
 ## Source pipeline
 
-CI reconstructs the 61,943-byte base source archive from sixteen pinned fragments and verifies its SHA-256 before extraction. It restores shared artwork/fonts, overlays the updated editor/processor/dial/rune/test files, and runs idempotent patch checks. The compatibility patch verifies the original four `latency` choices remain in their original order; the new Zero choice is backed by an appended `zeroLatency` boolean after `mode`.
+CI reconstructs the 61,943-byte base source archive from sixteen pinned fragments and verifies its SHA-256 before extraction. The updated UI/DSP overlay is also reconstructed from eight pinned fragments under `source-overlay/parts/`; CI verifies its exact 16,741-byte length and SHA-256 (`ab0e2aa6a575334e491ccf86e5623b416f0e804645d148598a9de890ddcc5a7f`) before unpacking it. It restores shared artwork/fonts, overlays the updated editor/processor/dial/rune/test files, and runs idempotent patch checks. The compatibility patch verifies the original four `latency` choices remain in their original order; the new Zero choice is backed by an appended `zeroLatency` boolean after `mode`.
 
 ## Regression suite
 
