@@ -111,7 +111,7 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-      - name: Verify legacy latency values and append Zero safely
+      - name: Verify original Zero-first five-choice latency selector
         shell: pwsh
         run: |
           pwsh -NoProfile -File scripts/patch-skell-snap-latency-compat.ps1 -SelfTest
