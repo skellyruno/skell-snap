@@ -19,8 +19,8 @@ $oldLayout = @'
 $newLayout = @'
     // Keep the original four-choice APVTS parameter byte-for-byte compatible:
     // old state and normalized automation values must retain their meanings.
-    // Zero is a new bool appended after mode; the UI combines it into a fifth
-    // menu item without inserting or reordering the old choices.
+    // Zero is a new bool appended after the existing mode choice, while the UI
+    // combines it into a fifth menu item without inserting/reordering old choices.
     l.add(std::make_unique<AudioParameterChoice>(ParameterID{ "latency", 1 }, "Latency",
           StringArray{ "1 ms (Ultra)", "2.5 ms (Low)", "5 ms (Bass / Baritone)", "10 ms (Stable)" }, 1));
     l.add(std::make_unique<AudioParameterChoice>(ParameterID{ "mode", 1 }, "Algorithm",
@@ -28,6 +28,9 @@ $newLayout = @'
     l.add(std::make_unique<AudioParameterBool>(ParameterID{ "zeroLatency", 1 }, "Zero Latency (Hard Tune)", false));
     return l;
 '@
+
+$oldLayout = $oldLayout.Replace("`r`n", "`n")
+$newLayout = $newLayout.Replace("`r`n", "`n")
 
 function Set-CompatibleLatencyLayout {
     param([Parameter(Mandatory)][string]$ProcessorPath)
