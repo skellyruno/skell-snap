@@ -4,19 +4,21 @@ The Windows VST3 workflow runs for pushes to `main`, pull requests targeting `ma
 
 ## Source pipeline
 
-CI reconstructs the 61,943-byte base source archive from sixteen pinned fragments and verifies its SHA-256 before extraction. The updated UI/DSP overlay is also reconstructed from eight pinned fragments under `source-overlay/parts/`; CI verifies its exact 16,741-byte length and SHA-256 (`ab0e2aa6a575334e491ccf86e5623b416f0e804645d148598a9de890ddcc5a7f`) before unpacking it. It restores shared artwork/fonts, overlays the updated editor/processor/dial/rune/test files, and runs idempotent patch checks. The compatibility patch verifies the original four `latency` choices remain in their original order; the new Zero choice is backed by an appended `zeroLatency` boolean after `mode`.
+CI reconstructs the 61,943-byte base source archive from sixteen pinned fragments and verifies its SHA-256 before extraction. The updated UI/DSP overlay is also reconstructed from eight pinned fragments under `source-overlay/parts/`; CI verifies its exact 16,741-byte length and SHA-256 (`ab0e2aa6a575334e491ccf86e5623b416f0e804645d148598a9de890ddcc5a7f`) before unpacking it. It restores shared artwork/fonts, overlays the updated editor/processor/dial/rune/test files, and runs idempotent patch checks. The latency check verifies the original five-choice selector is restored with Zero first and 2.5 ms as default; there is no separate `zeroLatency` Boolean.
 
 ## Regression suite
 
-Portable CMake/CTest includes DSP accuracy and block-size tests, the 80-case byte-for-byte Classic-vs-legacy comparison, rune motion/audio activity and glyph-catalogue tests, and UI frame-pacer tests. The Retune scale helper verifies both endpoints and the original default conversion.
+Portable CMake/CTest includes DSP accuracy and block-size tests, the 80-case byte-for-byte Classic-vs-legacy comparison, Crystal YIN correlation equivalence across four difficult signals and four block sizes, rune motion/Retune brightness/audio pulse mapping, glyph-catalogue tests, and UI frame-pacer tests.
 
 The Windows job then configures JUCE 8.0.12, builds **SkellSnap_VST3 only**, validates moduleinfo/class IDs/AMD64 PE and SHA-256 provenance, then runs pluginval strictness 5.
 
-## Preset/automation compatibility
+## Latency and Retune controls
 
-The existing `retune` parameter is still 0–500 ms, step 0.1 ms, skew 0.4 and default 25 ms, with its original ID and version hint. Its dial presentation now reads 0–100 in reverse: 0 maps to 0 ms (hard) and 100 maps to 500 ms (slow); the original 25 ms default displays as 5. The slider attachment still uses the unchanged APVTS parameter, so existing presets and automation remain valid.
+The Latency menu is restored to the original five choices: Zero first, then 1 / 2.5 / 5 / 10 ms, with 2.5 ms default. The AudioParameterChoice normalized value maps to the five-entry DSP lookup table; no separate `zeroLatency` Boolean is used.
 
-The existing `latency` APVTS parameter also keeps its exact four choices/order/default. Zero is added as a separate boolean after `mode`, so its UI menu can show a fifth choice without shifting saved normalized choice values.
+The Retune dial reads 100 at the left down to 0 at the right. Clockwise movement lowers stored milliseconds, and 0 ms is hardest / instant correction. The unchanged tuning engine receives the same original 0–500 ms Retune value. The JUCE rotary angles are offset to align JUCE's top-origin coordinates with the artwork's 3-o'clock-origin arc.
+
+The rune layer is subdued at 100 and brightens toward 0. A smoothed RMS envelope drives a separate pulse; pitch-lock confidence affects orbit movement only, not the audio-brightness pulse.
 
 ## Rune feedback
 
