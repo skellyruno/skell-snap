@@ -1,19 +1,40 @@
-# Windows VST3 build
+# Windows x64 VST3 build
 
-The repository's **Windows VST3** GitHub Actions workflow runs on pushes to `main`, pull requests targeting `main`, and manual dispatch.
+The **Windows VST3** workflow runs on pushes to `main`, pull requests targeting `main`, and manual dispatch.
+Superseded PR builds may be cancelled; main-branch and manual builds are protected.
 
-It reconstructs the source tree from `source-archive/skell-snap.zip`, runs the portable DSP test executable, configures the JUCE 8.0.12 project, and builds the Release VST3 for Windows x64.
+## Source reconstruction
 
-## Release verification
+The eight binary fragments under `source-archive/parts/` are concatenated by
+`scripts/reassemble-source-archive.ps1`. The script checks the exact 50,306-byte size and SHA-256 before the
+archive is extracted. CI restores the shared artwork/font files from `Assets/` into the source tree and runs the
+existing default-program-name patch and its self-test.
 
-After the build, `scripts/verify-vst3-bundle.ps1` checks the VST3 bundle structure, strict JSON metadata, non-empty and unique class IDs, the single Windows x64 module, and the PE AMD64 machine signature. It also hashes the preserved source ZIP and the exact PowerShell overlay applied to that source, then records both input paths, sizes, and SHA-256 values alongside the compiled module hash in the release manifest.
+## Classic parity gate
 
-The verifier's `-SelfTest` mode exercises valid output, verifies the recorded source-input hashes, and rejects duplicate class IDs, duplicate bundles, non-AMD64 PE files, and missing source inputs. The workflow also self-tests and applies a minimal patch to the extracted `Source/PluginProcessor.h` so the one default program reports the non-empty name `Default`; the archived source ZIP is not overwritten.
+The portable CMake test target `SnapClassicCompatTests` compiles the archived pre-Crystal `SnapCore.h` alongside
+the current Classic implementation. It requires bit-identical output samples, all telemetry fields, shifter delay,
+ratio and reported latency over 80 combinations: 4 sample rates, 5 block sizes, 4 parameter profiles and changes
+during processing. See `docs/classic-compatibility.md` for the full measurement details.
 
-## Artifact visibility
+Run locally:
 
-The repository is public, so the workflow intentionally withholds the installable VST3 artifact. GitHub Actions artifacts are not a private preview channel for a public repository. The build and verification jobs still run; `Skell-Snap-windows-latest` is uploaded only when the repository is private.
+```sh
+cmake -S . -B build-core -DSNAP_BUILD_PLUGIN=OFF -DSNAP_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-core --parallel
+ctest --test-dir build-core --output-on-failure
+```
 
-## Owner acceptance
+## Windows plugin verification
 
-A green workflow confirms CI compilation and package structure, not FL Studio acceptance. Install, host scan/load, state recall, automation, real-vocal A/B, callback CPU, glitches, and host/device latency remain separate owner-side gates.
+After CTest passes, CI configures JUCE 8.0.12 and builds the `SkellSnap_VST3` target explicitly (no Standalone).
+`scripts/verify-vst3-bundle.ps1` checks bundle structure, JSON metadata, non-empty/unique class IDs, the Windows
+x64 module, PE AMD64 signature and SHA-256 provenance for source archive, build overlay and compiled module.
+The workflow then validates the bundle with pluginval strictness level 5 and uploads the Windows x64 VST3 artifact
+for 30 days.
+
+## Acceptance boundary
+
+A green workflow confirms the automated parity/UI/DSP suite, Windows compilation, package verification and pluginval.
+It does not replace installation and scan/load in FL Studio, state recall and automation checks, real-vocal A/B
+listening, or measured callback CPU, glitches and host/device latency.

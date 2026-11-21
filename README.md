@@ -1,42 +1,37 @@
 # Skell-Snap
 
-Low-latency pitch correction plugin from the supplied source archive.
+Low-latency pitch correction plugin, built as a Windows x64 JUCE VST3.
 
-The original project snapshot is preserved byte-for-byte in `source-archive/skell-snap.zip`. The Windows workflow extracts that snapshot, runs its portable DSP tests, builds the JUCE 8.0.12 VST3 for Windows x64, and verifies the resulting bundle before considering it an artifact candidate.
+## DSP compatibility
 
-## Windows VST3 verification
+Classic mode is regression-tested against the archived pre-Crystal engine. The test builds the archived legacy
+`SnapCore.h` and current Classic implementation side by side, then compares every output sample, telemetry field,
+shifter delay/ratio state and reported latency.
 
-The **Windows VST3** workflow runs on:
+**Result: Classic is bit-identical across 80 exercised combinations** covering 44.1, 48, 96 and 192 kHz sample
+rates, five block sizes, four parameter profiles and live parameter changes. This is exact parity for these test
+cases, not a mathematical proof for every compiler, architecture or possible input.
 
-- Pushes to `main`
-- Pull requests targeting `main`
-- Manual dispatch from the Actions tab
+All existing parameter IDs, version hints, choice order, ranges, steps, skew values and defaults are preserved.
+The new Algorithm choice is appended after the existing parameters and defaults to Classic.
 
-The release verifier checks:
+See [Classic compatibility report](docs/classic-compatibility.md) for the tested matrix and the detailed parameter
+comparison. The report and regression fixture ship with the source archive.
 
-- Exactly one top-level `Skell-Snap.vst3` bundle
-- A parseable `Contents/Resources/moduleinfo.json` with a name, version, and at least one class
-- Unique VST3 class IDs
-- Exactly one VST3 module under `Contents/x86_64-win`
-- A valid Windows PE header with AMD64 machine type
-- SHA-256 provenance for the module, the preserved source ZIP, and the applied program-name overlay, plus `release-manifest.json` and `SHA256SUMS`
+## Windows build and verification
 
-The verifier also has a Windows PowerShell self-test covering valid bundles, duplicate class IDs, duplicate bundles, wrong-architecture PE files, missing source inputs, and exact source/overlay SHA-256 recording. The build applies a narrow, tested source overlay that names the single default program `Default`; the original ZIP remains preserved byte-for-byte.
+The **Windows VST3** workflow reconstructs and SHA-256 verifies the checked-in source archive fragments, restores the
+shared artwork/font bundle, applies the narrow tested default-program-name overlay, and runs the complete portable
+DSP/UI regression suite. It then builds the Release Windows x64 VST3 target only (no Standalone), validates the
+bundle structure, metadata, class IDs and AMD64 PE module, runs pluginval at strictness level 5 and publishes the
+`Skell-Snap-Windows-x64-VST3` workflow artifact for 30 days.
 
-## Preview artifact policy
-
-This repository is currently public. GitHub Actions artifacts from a public repository are not a private delivery channel, so the workflow **withholds the installable VST3 artifact while the repository is public**. The DSP tests, Windows build, and bundle verification still run.
-
-The `Skell-Snap-windows-latest` artifact is uploaded only when the repository is private. No public release or installable download is created by this workflow.
+The source archive is stored as eight binary fragments under `source-archive/parts/`; the exact reconstructed
+archive SHA-256 is checked in CI. Artwork and the Montserrat font/licence are stored under `Assets/` and retained
+byte-for-byte from the existing Skell-Necromancer asset set.
 
 ## Acceptance boundary
 
-A successful Windows workflow verifies the CI build and packaging checks only. It does not replace:
-
-- Installing the VST3 on the owner's Windows machine
-- Loading and scanning it in FL Studio
-- Testing state recall and automation
-- Real vocal A/B listening
-- Measuring callback CPU, glitches, and actual host/device latency
-
-Do not treat a workflow start, CMake configure, or compile alone as release acceptance.
+Portable tests and Windows CI verify the algorithm, UI regression suite, compilation, packaging and pluginval.
+Final host acceptance still requires installing/scanning/loading the VST3 in FL Studio, checking state recall and
+automation, and listening to real-vocal A/B examples while measuring callback CPU, glitches and host/device latency.
