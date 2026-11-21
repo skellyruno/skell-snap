@@ -52,6 +52,28 @@ jobs:
           }
           "SKELL_SNAP_SOURCE=$sourceRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
 
+      - name: Apply updated audio-reactive UI/source overlay
+        shell: pwsh
+        run: |
+          $overlayRoot = Join-Path $PWD 'source-overlay'
+          New-Item -ItemType Directory -Path $overlayRoot -Force | Out-Null
+          tar -xzf (Join-Path $PWD 'source-overlay.tar.gz') -C $overlayRoot
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item -Path (Join-Path $overlayRoot 'Source/*') -Destination (Join-Path $env:SKELL_SNAP_SOURCE 'Source') -Recurse -Force
+          Copy-Item -LiteralPath (Join-Path $overlayRoot 'CMakeLists.txt') -Destination (Join-Path $env:SKELL_SNAP_SOURCE 'CMakeLists.txt') -Force
+          Copy-Item -Path (Join-Path $overlayRoot 'tests/*') -Destination (Join-Path $env:SKELL_SNAP_SOURCE 'tests') -Recurse -Force
+          if (-not (Test-Path (Join-Path $env:SKELL_SNAP_SOURCE 'Source/ui/RetuneScale.h'))) {
+            throw "The reversed Retune scale helper was not applied."
+          }
+
+      - name: Verify legacy latency values and append Zero safely
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File scripts/patch-skell-snap-latency-compat.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File scripts/patch-skell-snap-latency-compat.ps1 -SourceRoot $env:SKELL_SNAP_SOURCE
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Patch and test the extracted source program name
         shell: pwsh
         run: |
@@ -95,7 +117,7 @@ jobs:
         shell: pwsh
         run: |
           $vst3Root = Join-Path $PWD 'build/SkellSnap_artefacts/Release/VST3'
-          pwsh -NoProfile -File scripts/verify-vst3-bundle.ps1 -Vst3Root $vst3Root -ExpectedBundleName 'Skell-Snap.vst3' -CommitSha $env:GITHUB_SHA -SourceArchivePath 'source-archive/skell-snap-source.tar.gz' -SourceOverlayPath 'scripts/patch-skell-snap-program-name.ps1'
+          pwsh -NoProfile -File scripts/verify-vst3-bundle.ps1 -Vst3Root $vst3Root -ExpectedBundleName 'Skell-Snap.vst3' -CommitSha $env:GITHUB_SHA -SourceArchivePath 'source-archive/skell-snap-source.tar.gz' -SourceOverlayPath 'source-overlay.tar.gz'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Validate VST3 with pluginval
@@ -105,10 +127,67 @@ jobs:
           strictness-level: 5
           pluginval-version: v2.0.0-beta3
 
-      - name: Upload verified Windows x64 VST3
+      - name: Create and inspect install-ready Windows ZIP
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $vst3Root = Join-Path $PWD 'build/SkellSnap_artefacts/Release/VST3'
+          $bundle = Join-Path $vst3Root 'Skell-Snap.vst3'
+          if (-not (Test-Path -LiteralPath $bundle -PathType Container)) {
+            throw "The built VST3 bundle is missing: $bundle"
+          }
+
+          $stage = Join-Path $env:RUNNER_TEMP 'Skell-Snap-Windows-Installer'
+          if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          Copy-Item -LiteralPath $bundle -Destination $stage -Recurse -Force
+          Copy-Item -LiteralPath (Join-Path $PWD 'Install-Skell-Snap.bat') -Destination $stage
+          Copy-Item -LiteralPath (Join-Path $PWD 'README-INSTALL.txt') -Destination $stage
+
+          $zipPath = Join-Path $PWD 'Skell-Snap-Windows-Installer.zip'
+          if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+          [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            $stage,
+            $zipPath,
+            [System.IO.Compression.CompressionLevel]::Optimal,
+            $false
+          )
+
+          $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+          try {
+            $entries = @($zip.Entries | ForEach-Object { $_.FullName })
+          }
+          finally { $zip.Dispose() }
+
+          $requiredEntries = @(
+            'Skell-Snap.vst3/Contents/Resources/moduleinfo.json',
+            'Skell-Snap.vst3/Contents/x86_64-win/Skell-Snap.vst3',
+            'Install-Skell-Snap.bat',
+            'README-INSTALL.txt'
+          )
+          foreach ($entry in $requiredEntries) {
+            if ($entries -notcontains $entry) {
+              throw "Installer ZIP is malformed; required entry is missing: $entry"
+            }
+          }
+          if ($entries.Count -lt 6) {
+            throw "Installer ZIP appears incomplete; found only $($entries.Count) entries."
+          }
+          $zipHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "Verified installer ZIP: $zipPath ($((Get-Item $zipPath).Length) bytes), SHA-256 $zipHash"
+
+      - name: Upload verified Windows x64 VST3 bundle
         uses: actions/upload-artifact@v6
         with:
           name: Skell-Snap-Windows-x64-VST3
           path: build/SkellSnap_artefacts/Release/VST3/Skell-Snap.vst3
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload install-ready Windows ZIP
+        uses: actions/upload-artifact@v6
+        with:
+          name: Skell-Snap-Windows-Installer
+          path: Skell-Snap-Windows-Installer.zip
           if-no-files-found: error
           retention-days: 30
