@@ -5,104 +5,62 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# The submitted Crystal snapshot had inserted Zero at index 0 of the legacy
-# latency choice. Repair that before building: keep the original four choices
-# and their order/default; append a separate zeroLatency boolean after mode.
-$oldLayout = @'
-    l.add(std::make_unique<AudioParameterChoice>(ParameterID{ "latency", 1 }, "Latency",
-          StringArray{ "0 ms (Zero - hard tune)", "1 ms (Ultra)", "2.5 ms (Low)", "5 ms (Bass / Baritone)", "10 ms (Stable)" }, 2));
-    l.add(std::make_unique<AudioParameterChoice>(ParameterID{ "mode", 1 }, "Algorithm",
-          StringArray{ "Classic", "Crystal" }, 0));
-    return l;
-'@
+function Assert-CompatibleLatencyLayout {
+    param([Parameter(Mandatory)][string]$Content)
 
-$newLayout = @'
-    // Keep the original four-choice APVTS parameter byte-for-byte compatible:
-    // old state and normalized automation values must retain their meanings.
-    // Zero is a new bool appended after the existing mode choice, while the UI
-    // combines it into a fifth menu item without inserting/reordering old choices.
-    l.add(std::make_unique<AudioParameterChoice>(ParameterID{ "latency", 1 }, "Latency",
-          StringArray{ "1 ms (Ultra)", "2.5 ms (Low)", "5 ms (Bass / Baritone)", "10 ms (Stable)" }, 1));
-    l.add(std::make_unique<AudioParameterChoice>(ParameterID{ "mode", 1 }, "Algorithm",
-          StringArray{ "Classic", "Crystal" }, 0));
-    l.add(std::make_unique<AudioParameterBool>(ParameterID{ "zeroLatency", 1 }, "Zero Latency (Hard Tune)", false));
-    return l;
-'@
-
-$oldLayout = $oldLayout.Replace("`r`n", "`n")
-$newLayout = $newLayout.Replace("`r`n", "`n")
-
-function Set-CompatibleLatencyLayout {
-    param([Parameter(Mandatory)][string]$ProcessorPath)
-
-    if (-not (Test-Path -LiteralPath $ProcessorPath -PathType Leaf)) {
-        throw "Skell-Snap processor source is missing: $ProcessorPath"
-    }
-
-    $content = [System.IO.File]::ReadAllText($ProcessorPath).Replace("`r`n", "`n")
-    if ($content.Contains($oldLayout)) {
-        $content = $content.Replace($oldLayout, $newLayout)
-        [System.IO.File]::WriteAllText($ProcessorPath, $content, [System.Text.UTF8Encoding]::new($false))
-        $result = 'patched'
-    }
-    elseif ($content.Contains($newLayout)) {
-        $result = 'already-patched'
-    }
-    else {
-        throw 'Could not prove the legacy four-choice latency order and appended zeroLatency layout. Refusing an ambiguous rewrite.'
+    $content = $Content.Replace("`r`n", "`n")
+    $legacyChoiceOrder = 'StringArray{ "1 ms (Ultra)", "2.5 ms (Low)", "5 ms (Bass / Baritone)", "10 ms (Stable)" }, 1));'
+    if (-not $content.Contains($legacyChoiceOrder)) {
+        throw 'Compatibility check failed: the original four latency choices/default/order must remain exactly unchanged.'
     }
 
     $latencyId = $content.IndexOf('ParameterID{ "latency", 1 }', [StringComparison]::Ordinal)
     $modeId = $content.IndexOf('ParameterID{ "mode", 1 }', [StringComparison]::Ordinal)
-    $zeroId = $content.IndexOf('ParameterID{ "zeroLatency", 1 }', [StringComparison]::Ordinal)
-    if ($latencyId -lt 0 -or $modeId -le $latencyId -or $zeroId -le $modeId) {
-        throw 'Parameter compatibility check failed: latency, mode and zeroLatency are not in the required order.'
+    $zeroBool = $content.IndexOf('AudioParameterBool>(ParameterID{ "zeroLatency", 1 }', [StringComparison]::Ordinal)
+    if ($latencyId -lt 0 -or $modeId -le $latencyId -or $zeroBool -le $modeId) {
+        throw 'Compatibility check failed: zeroLatency must be a new bool appended after the existing mode choice.'
     }
 
-    if (-not $content.Contains('StringArray{ "1 ms (Ultra)", "2.5 ms (Low)", "5 ms (Bass / Baritone)", "10 ms (Stable)" }')) {
-        throw 'Parameter compatibility check failed: original latency choices/order were not retained.'
-    }
     if (-not $content.Contains('pZeroLatency = apvts.getRawParameterValue("zeroLatency")')) {
-        throw 'Parameter compatibility check failed: zeroLatency is not bound from APVTS.'
+        throw 'Compatibility check failed: the appended zeroLatency parameter is not bound from APVTS.'
+    }
+    if (-not $content.Contains('pZeroLatency->load(std::memory_order_relaxed) > 0.5f')) {
+        throw 'Compatibility check failed: DSP does not read the zeroLatency state parameter.'
     }
 
-    return $result
+    $retunePattern = 'ParameterID{s*"retune",s*1s*},s*"Retune Speed",s*[
+]+s*NormalisableRange<float>(0.0f,s*500.0f,s*0.1f,s*0.4f),s*25.0f'
+    if (-not [regex]::IsMatch($content, $retunePattern)) {
+        throw 'Compatibility check failed: Retune APVTS ID/range/step/skew/default changed.'
+    }
+
+    return $true
 }
 
 function Invoke-SelfTest {
-    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('skell-snap-latency-layout-' + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
-    $processor = Join-Path $tempRoot 'PluginProcessor.cpp'
-    try {
-        $fixture = @'
-void createLayout() {
-    l.add(std::make_unique<AudioParameterChoice>(ParameterID{ "latency", 1 }, "Latency",
-          StringArray{ "0 ms (Zero - hard tune)", "1 ms (Ultra)", "2.5 ms (Low)", "5 ms (Bass / Baritone)", "10 ms (Stable)" }, 2));
-    l.add(std::make_unique<AudioParameterChoice>(ParameterID{ "mode", 1 }, "Algorithm",
+    $good = @'
+l.add(std::make_unique<AudioParameterFloat>(ParameterID{ "retune", 1 }, "Retune Speed",
+          NormalisableRange<float>(0.0f, 500.0f, 0.1f, 0.4f), 25.0f));
+l.add(std::make_unique<AudioParameterChoice>(ParameterID{ "latency", 1 }, "Latency",
+          StringArray{ "1 ms (Ultra)", "2.5 ms (Low)", "5 ms (Bass / Baritone)", "10 ms (Stable)" }, 1));
+l.add(std::make_unique<AudioParameterChoice>(ParameterID{ "mode", 1 }, "Algorithm",
           StringArray{ "Classic", "Crystal" }, 0));
-    return l;
-}
+l.add(std::make_unique<AudioParameterBool>(ParameterID{ "zeroLatency", 1 }, "Zero Latency (Hard Tune)", false));
 pZeroLatency = apvts.getRawParameterValue("zeroLatency");
+p.latencyMs = pZeroLatency->load(std::memory_order_relaxed) > 0.5f ? 0.0 : kLat[1];
 '@
-        [System.IO.File]::WriteAllText($processor, $fixture.Replace("`r`n", "`n"), [System.Text.UTF8Encoding]::new($false))
+    Assert-CompatibleLatencyLayout -Content $good | Out-Null
 
-        $first = Set-CompatibleLatencyLayout -ProcessorPath $processor
-        if ($first -ne 'patched') { throw "Expected first pass to patch; got '$first'." }
-        $second = Set-CompatibleLatencyLayout -ProcessorPath $processor
-        if ($second -ne 'already-patched') { throw "Expected second pass to be idempotent; got '$second'." }
+    $bad = $good.Replace(
+        'StringArray{ "1 ms (Ultra)", "2.5 ms (Low)", "5 ms (Bass / Baritone)", "10 ms (Stable)" }, 1));',
+        'StringArray{ "0 ms (Zero - hard tune)", "1 ms (Ultra)", "2.5 ms (Low)", "5 ms (Bass / Baritone)", "10 ms (Stable)" }, 2));'
+    ).Replace('l.add(std::make_unique<AudioParameterBool>(ParameterID{ "zeroLatency", 1 }, "Zero Latency (Hard Tune)", false));', '')
+    $rejected = $false
+    try { Assert-CompatibleLatencyLayout -Content $bad | Out-Null }
+    catch { $rejected = $true }
+    if (-not $rejected) { throw 'Self-test failed: an inserted Zero choice was not rejected.' }
 
-        $final = [System.IO.File]::ReadAllText($processor)
-        if ($final.Contains('"0 ms (Zero - hard tune)", "1 ms')) {
-            throw 'Self-test failed: Zero was still inserted into the legacy latency choice.'
-        }
-        if (-not $final.Contains('AudioParameterBool>(ParameterID{ "zeroLatency", 1 }')) {
-            throw 'Self-test failed: appended zeroLatency boolean was not created.'
-        }
-        Write-Host 'PASS: original latency choices/order are preserved and Zero is appended after mode as a bool.'
-    }
-    finally {
-        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    Write-Host 'PASS: original latency mapping + Retune contract preserved; Zero is appended as a separate bool.'
 }
 
 if ($SelfTest) {
@@ -112,7 +70,10 @@ if ($SelfTest) {
 if ([string]::IsNullOrWhiteSpace($SourceRoot)) {
     throw 'SourceRoot is required unless -SelfTest is specified.'
 }
-
 $processorPath = Join-Path $SourceRoot 'Source/PluginProcessor.cpp'
-$result = Set-CompatibleLatencyLayout -ProcessorPath $processorPath
-Write-Host "Skell-Snap latency parameter compatibility: $result"
+if (-not (Test-Path -LiteralPath $processorPath -PathType Leaf)) {
+    throw "Skell-Snap processor source is missing: $processorPath"
+}
+$content = [System.IO.File]::ReadAllText($processorPath)
+Assert-CompatibleLatencyLayout -Content $content | Out-Null
+Write-Host 'PASS: legacy latency values and Retune APVTS contract are preserved.'
