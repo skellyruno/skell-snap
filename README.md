@@ -8,21 +8,15 @@ Low-latency pitch correction, shipped as a **Windows x64 JUCE 8 VST3**. The rele
 
 `Crystal` is the newer YIN/CMNDF detector path, with a 60 Hz high-pass plus raw-signal fallback, higher analysis rate, onset confirmation and output-pitch tracking. Compare it with Classic on the same vocal; it is not claimed to be universally better for every singer.
 
-## Retune control: reversed 100 to 0
+## Latency selector
 
-The main RETUNE dial now runs **100 → 0** in the hardening direction: **0 is the hardest / instant correction**, while 100 is the slowest / smoothest glide. The display is a 0–100 presentation scale derived from the original 0–500 ms value (5 ms per display point); the existing 25 ms default therefore displays as 5.
+The Latency menu is restored to the original five-choice selector: **0 ms (Zero - hard tune), 1 ms (Ultra), 2.5 ms (Low), 5 ms (Bass / Baritone), 10 ms (Stable)**. The default remains **2.5 ms**. Zero requests 0 host PDC samples; the pitch engine still has its internal pass-through delay, so end-to-end audio delay is not mathematically zero.
 
-This is a UI-only reversal. The APVTS parameter ID `retune`, version hint, 0–500 ms range, 0.1 ms step, 0.4 skew and 25 ms default are unchanged. Host automation still writes the original parameter and old presets retain their values.
+## Retune dial and rune feedback
 
-## Faster, audio-reactive runes
+The physical dial runs **100 on the left down to 0 on the right**. Turning clockwise lowers the displayed Retune value; **0 is the hardest / instant correction**, and 100 is the slowest / smoothest glide. The original 0–500 ms Retune parameter, tuning algorithm and pitch-shift path remain unchanged; only the knob's physical mapping is inverted. The original 25 ms default still displays as 5.
 
-The rune bands orbit faster at rest and accelerate further with incoming audio. A smoothed RMS envelope controls the speed and a restrained increase in rune/flare brightness; pitch-lock confidence contributes a little additional energy. The detector/audio path does not allocate for this feedback and the UI only reads an atomic activity value. The effect is intentionally subtle rather than a full-brightness pulse.
-
-## Zero-latency host mode
-
-The Latency menu combines the original 1 / 2.5 / 5 / 10 ms choices with a fifth `0 ms (Zero - hard tune)` item. Zero requests 0 host PDC samples, but does not mean mathematically zero end-to-end audio delay: the engine retains its internal pass-through delay and pitch-shifted content can sit later by part of an input period. The 5 ms choice remains preferable for deep voices.
-
-**Preset compatibility:** the original `latency` APVTS parameter ID, four choice values, order and default are kept exactly intact. Zero is stored in a new `zeroLatency` boolean appended after `mode`; it is not inserted into the legacy choice list. The other parameter IDs, version hints, ranges, steps, skew values and defaults remain unchanged. `Classic` remains the default algorithm.
+The rune field is subdued at 100 and brightens as Retune approaches 0. Incoming audio drives a separate smoothed, softly pulsing brightness lift; stronger input produces a stronger pulse. Audio activity is measured before processing and passed to the UI via an atomic envelope without UI work or allocation on the audio thread.
 
 ## Windows installer ZIP
 
