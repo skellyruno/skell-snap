@@ -1,40 +1,29 @@
-# Windows x64 VST3 build
+# Windows x64 VST3 build and verification
 
-The **Windows VST3** workflow runs on pushes to `main`, pull requests targeting `main`, and manual dispatch.
-Superseded PR builds may be cancelled; main-branch and manual builds are protected.
+The Windows VST3 workflow runs for pushes to `main`, pull requests targeting `main`, and manual dispatch. Only superseded pull-request runs may be cancelled; `main` and manual builds are protected.
 
-## Source reconstruction
+## Source pipeline
 
-The eight binary fragments under `source-archive/parts/` are concatenated by
-`scripts/reassemble-source-archive.ps1`. The script checks the exact 50,306-byte size and SHA-256 before the
-archive is extracted. CI restores the shared artwork/font files from `Assets/` into the source tree and runs the
-existing default-program-name patch and its self-test.
+CI reconstructs the 61,943-byte base source archive from sixteen pinned fragments and verifies its SHA-256 before extraction. The updated UI/DSP overlay is also reconstructed from eight pinned fragments under `source-overlay/parts/`; CI verifies its exact 16,741-byte length and SHA-256 (`ab0e2aa6a575334e491ccf86e5623b416f0e804645d148598a9de890ddcc5a7f`) before unpacking it. It restores shared artwork/fonts, overlays the updated editor/processor/dial/rune/test files, and runs idempotent patch checks. The compatibility patch verifies the original four `latency` choices remain in their original order; the new Zero choice is backed by an appended `zeroLatency` boolean after `mode`.
 
-## Classic parity gate
+## Regression suite
 
-The portable CMake test target `SnapClassicCompatTests` compiles the archived pre-Crystal `SnapCore.h` alongside
-the current Classic implementation. It requires bit-identical output samples, all telemetry fields, shifter delay,
-ratio and reported latency over 80 combinations: 4 sample rates, 5 block sizes, 4 parameter profiles and changes
-during processing. See `docs/classic-compatibility.md` for the full measurement details.
+Portable CMake/CTest includes DSP accuracy and block-size tests, the 80-case byte-for-byte Classic-vs-legacy comparison, rune motion/audio activity and glyph-catalogue tests, and UI frame-pacer tests. The Retune scale helper verifies both endpoints and the original default conversion.
 
-Run locally:
+The Windows job then configures JUCE 8.0.12, builds **SkellSnap_VST3 only**, validates moduleinfo/class IDs/AMD64 PE and SHA-256 provenance, then runs pluginval strictness 5.
 
-```sh
-cmake -S . -B build-core -DSNAP_BUILD_PLUGIN=OFF -DSNAP_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release
-cmake --build build-core --parallel
-ctest --test-dir build-core --output-on-failure
-```
+## Preset/automation compatibility
 
-## Windows plugin verification
+The existing `retune` parameter is still 0–500 ms, step 0.1 ms, skew 0.4 and default 25 ms, with its original ID and version hint. Its dial presentation now reads 0–100 in reverse: 0 maps to 0 ms (hard) and 100 maps to 500 ms (slow); the original 25 ms default displays as 5. The slider attachment still uses the unchanged APVTS parameter, so existing presets and automation remain valid.
 
-After CTest passes, CI configures JUCE 8.0.12 and builds the `SkellSnap_VST3` target explicitly (no Standalone).
-`scripts/verify-vst3-bundle.ps1` checks bundle structure, JSON metadata, non-empty/unique class IDs, the Windows
-x64 module, PE AMD64 signature and SHA-256 provenance for source archive, build overlay and compiled module.
-The workflow then validates the bundle with pluginval strictness level 5 and uploads the Windows x64 VST3 artifact
-for 30 days.
+The existing `latency` APVTS parameter also keeps its exact four choices/order/default. Zero is added as a separate boolean after `mode`, so its UI menu can show a fifth choice without shifting saved normalized choice values.
 
-## Acceptance boundary
+## Rune feedback
 
-A green workflow confirms the automated parity/UI/DSP suite, Windows compilation, package verification and pluginval.
-It does not replace installation and scan/load in FL Studio, state recall and automation checks, real-vocal A/B
-listening, or measured callback CPU, glitches and host/device latency.
+The editor receives a smoothed RMS activity envelope through an atomic value. Runes move faster at baseline and accelerate modestly with signal level; glow/flare opacity also increases slightly with audio activity and pitch lock. The audio callback only performs bounded RMS measurement and envelope smoothing—no UI work or dynamic allocation.
+
+## Install ZIP
+
+After pluginval, CI creates `Skell-Snap-Windows-Installer.zip` containing the complete `Skell-Snap.vst3` bundle, `Install-Skell-Snap.bat`, and `README-INSTALL.txt`. A ZIP inspection step verifies the module, moduleinfo, installer and instructions are present before upload. The raw VST3 bundle is also uploaded separately.
+
+A green workflow verifies automated tests, Windows compilation, package structure and pluginval. It does not replace FL Studio scan/load, preset/state recall, automation playback, real-vocal A/B listening, or PC-specific latency/CPU/glitch measurements.
