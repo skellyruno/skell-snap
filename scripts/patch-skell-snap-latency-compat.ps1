@@ -28,9 +28,11 @@ function Assert-CompatibleLatencyLayout {
         throw 'Compatibility check failed: DSP does not read the zeroLatency state parameter.'
     }
 
-    $retunePattern = 'ParameterID{s*"retune",s*1s*},s*"Retune Speed",s*[
-]+s*NormalisableRange<float>(0.0f,s*500.0f,s*0.1f,s*0.4f),s*25.0f'
-    if (-not [regex]::IsMatch($content, $retunePattern)) {
+    # Normalize source whitespace before comparing so CRLF/LF and indentation
+    # cannot create false negatives in the compatibility guard.
+    $normalized = [regex]::Replace($content, '\s+', ' ')
+    $retuneContract = 'ParameterID{ "retune", 1 }, "Retune Speed", NormalisableRange<float>(0.0f, 500.0f, 0.1f, 0.4f), 25.0f'
+    if (-not $normalized.Contains($retuneContract)) {
         throw 'Compatibility check failed: Retune APVTS ID/range/step/skew/default changed.'
     }
 
