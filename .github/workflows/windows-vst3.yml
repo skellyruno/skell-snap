@@ -24,6 +24,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Test strict VST3 moduleinfo JSON normalizer
+        run: python -m unittest discover -s tests -p "test_normalize_vst3_moduleinfo.py" -v
+
       - name: Reassemble and verify the source archive
         shell: pwsh
         run: |
@@ -161,6 +167,13 @@ jobs:
         shell: pwsh
         run: |
           cmake --build build --target SkellSnap_VST3 --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Normalize JUCE moduleinfo.json to strict host-readable JSON
+        shell: pwsh
+        run: |
+          $moduleinfo = Join-Path $PWD 'build/SkellSnap_artefacts/Release/VST3/Skell-Snap.vst3/Contents/Resources/moduleinfo.json'
+          python scripts/normalize_vst3_moduleinfo.py --path "$moduleinfo" --expected-name "Skell-Snap"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify VST3 bundle, moduleinfo, class IDs and AMD64 PE
