@@ -156,6 +156,50 @@ jobs:
           ctest --test-dir build-core -C Release --output-on-failure
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+
+      # Run original equivalence gates first; apply the audition patch only to this draft PR.
+      - name: Apply and verify DSP-only audition patch
+        if: ${{ github.event_name == 'pull_request' && github.head_ref == 'codex/skell-snap-zero-latency-crystal-compat-20261121' }}
+        shell: pwsh
+        run: |
+          $patch = Join-Path $env:RUNNER_TEMP 'skell-snap-dsp-only.patch'
+          $original = Join-Path $PWD 'audition/skell-snap-dsp-only.patch'
+          $patchText = [IO.File]::ReadAllText($original).Replace("`r`n", "`n")
+          [IO.File]::WriteAllText($patch, $patchText, [Text.UTF8Encoding]::new($false))
+          if ((Get-FileHash $patch -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'efa900f00f5f689b6f43f93e75e598d15917fc7f390201589e86ff6b006ed768') { throw 'Audition patch hash mismatch' }
+          $core = Join-Path $env:SKELL_SNAP_SOURCE 'Source/dsp/SnapCore.h'
+          if ((Get-FileHash $core -Algorithm SHA256).Hash.ToLowerInvariant() -ne '9bef538b0df377df49720bcd0fe8ae7c98f9d0a166e952ddc0023e430c3d9736') { throw 'Audition baseline core hash mismatch' }
+          git -C "$env:SKELL_SNAP_SOURCE" apply --check "$patch"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C "$env:SKELL_SNAP_SOURCE" apply "$patch"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash $core -Algorithm SHA256).Hash.ToLowerInvariant() -ne '2be1e3ebf58a2569756de678e58470d78cd101c8a66324617388e69e306a7541') { throw 'Audition core hash mismatch' }
+
+      - name: Build and test audition DSP in both modes at Zero and default latency
+        if: ${{ github.event_name == 'pull_request' && github.head_ref == 'codex/skell-snap-zero-latency-crystal-compat-20261121' }}
+        shell: pwsh
+        run: |
+          cmake --build build-core --config Release --target SnapCoreTests Snap_rune_motion_test Snap_rune_glyph_catalog_test Snap_ui_frame_pacer_test --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir build-core -C Release --output-on-failure -R '^(SnapCoreTests|Snap_rune_motion_test|Snap_rune_glyph_catalog_test|Snap_ui_frame_pacer_test)$'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $testExe = Join-Path $PWD 'build-core/Release/SnapCoreTests.exe'
+          & $testExe --quick --crystal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $testExe --quick --zero
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $testExe --quick --crystal --zero
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload audition source for debugging and provenance
+        if: ${{ github.event_name == 'pull_request' && github.head_ref == 'codex/skell-snap-zero-latency-crystal-compat-20261121' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: Skell-Snap-Audition-Source
+          path: ${{ env.SKELL_SNAP_SOURCE }}
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Configure JUCE VST3
         shell: pwsh
         run: |
@@ -206,6 +250,9 @@ jobs:
           Copy-Item -LiteralPath $bundle -Destination $stage -Recurse -Force
           Copy-Item -LiteralPath (Join-Path $PWD 'Install-Skell-Snap.bat') -Destination $stage
           Copy-Item -LiteralPath (Join-Path $PWD 'README-INSTALL.txt') -Destination $stage
+          if ($env:GITHUB_EVENT_NAME -eq 'pull_request' -and $env:GITHUB_HEAD_REF -eq 'codex/skell-snap-zero-latency-crystal-compat-20261121') {
+            Add-Content -LiteralPath (Join-Path $stage 'README-INSTALL.txt') -Value "`nEXPERIMENTAL DSP AUDITION: Classic and Crystal audio behavior differs from the previous build. Back up the installed VST3 and existing projects before testing. Not a stable release. Commit: $env:GITHUB_SHA"
+          }
 
           $zipPath = Join-Path $PWD 'Skell-Snap-Windows-Installer.zip'
           if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
@@ -239,7 +286,7 @@ jobs:
       - name: Upload verified Windows x64 VST3 bundle
         uses: actions/upload-artifact@v6
         with:
-          name: Skell-Snap-Windows-x64-VST3
+          name: ${{ (github.event_name == 'pull_request' && github.head_ref == 'codex/skell-snap-zero-latency-crystal-compat-20261121') && 'Skell-Snap-Audition-Windows-x64-VST3' || 'Skell-Snap-Windows-x64-VST3' }}
           path: build/SkellSnap_artefacts/Release/VST3/Skell-Snap.vst3
           if-no-files-found: error
           retention-days: 30
@@ -247,7 +294,7 @@ jobs:
       - name: Upload install-ready Windows ZIP
         uses: actions/upload-artifact@v6
         with:
-          name: Skell-Snap-Windows-Installer
+          name: ${{ (github.event_name == 'pull_request' && github.head_ref == 'codex/skell-snap-zero-latency-crystal-compat-20261121') && 'Skell-Snap-Audition-Windows-Installer' || 'Skell-Snap-Windows-Installer' }}
           path: Skell-Snap-Windows-Installer.zip
           if-no-files-found: error
           retention-days: 30

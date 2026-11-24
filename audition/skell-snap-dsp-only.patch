@@ -1,0 +1,125 @@
+--- a/Source/dsp/SnapCore.h
++++ b/Source/dsp/SnapCore.h
+@@ -229,6 +229,24 @@
+                 lobeI_[size_t(nl)] = bi; lobeV_[size_t(nl)] = nsdf_[size_t(bi)]; ++nl;
+             }
+         }
++        if (nl == 0 && !yin_) {
++            // Low-formant-dominated vowels (e.g. /a/ above ~400 Hz) never push the NSDF to zero, so the
++            // zero-crossing lobes above find nothing. Fall back to prominence peaks: a maximum that rose
++            // >= 0.15 above the preceding valley and fell >= 0.15 after it.
++            double valley = nsdf_[1], pkv = -1.0; int pk = -1;
++            for (int u = 2; u <= tmax; ++u) {
++                const double v = nsdf_[size_t(u)];
++                if (pk < 0) {
++                    if (v < valley) valley = v;
++                    else if (v - valley >= 0.15) { pk = u; pkv = v; }
++                } else if (v > pkv) { pk = u; pkv = v; }
++                else if (pkv - v >= 0.15) {
++                    if (pk >= tmin_ && nl < lobeCap) { lobeI_[size_t(nl)] = pk; lobeV_[size_t(nl)] = pkv; ++nl; }
++                    pk = -1; valley = v;
++                }
++            }
++            if (pk >= tmin_ && pk < tmax && nl < lobeCap) { lobeI_[size_t(nl)] = pk; lobeV_[size_t(nl)] = pkv; ++nl; }
++        }
+         if (nl == 0) return false;
+         double kmax = 0.0;
+         for (int l = 0; l < nl; ++l) kmax = std::max(kmax, lobeV_[size_t(l)]);
+@@ -368,7 +386,7 @@
+         mask_ = rs - 1;
+         sc_.assign(size_t(2 * (std::max(2, int(std::lround(0.06 * maxP_))) + 2) + 3), 0.0);
+         dMax_ = double(rs) - 8.0 - 2.0 * maxLx_;
+-        rCoef_ = 1.0 - std::exp(-1.0 / (0.003 * sr_));
++        rCoef_ = 1.0 - std::exp(-1.0 / (0.003 * sr_));   // overwritten per mode in applyParams
+         params_ = Params{};
+         tableKey_ = 0xffffffffu; refKey_ = -1.0;
+         applyParams(params_, true);
+@@ -458,7 +476,8 @@
+         params_.humanize = std::min(100.0, std::max(0.0, p.humanize));
+         det_.setMinHz(p.minHz); detB_.setMinHz(p.minHz);
+         const int md = p.mode == 1 ? 1 : 0;
+-        if (md != mode_ || force) {                    // switching algorithms: fresh analysis state, audio untouched
++        const bool modeChanged = md != mode_ || force;
++        if (modeChanged) {                    // switching algorithms: fresh analysis state, audio untouched
+             mode_ = md;
+             det_.setYin(md == 1); detB_.setYin(md == 1);
+             // Crystal: twice the analysis rate, tighter tracking window, YIN-scaled voicing thresholds,
+@@ -466,7 +485,8 @@
+             hop_ = md == 1 ? hopC_ : hopN_; hopCount_ = 0;
+             det_.setTrack(md == 1 ? 1.3 : 1.6); detB_.setTrack(md == 1 ? 1.3 : 1.6);
+             enter_ = md == 1 ? 0.45 : kEnter; exit_ = md == 1 ? 0.30 : kExit;
+-            slopeSpan_ = md == 1 ? 6 : 3;
++            slopeSpan_ = md == 1 ? 6 : 3; gate_ = true;
++
+             det_.reset(); detB_.reset();
+             std::fill(fmono_.begin(), fmono_.end(), 0.f); hs1_ = hs2_ = 0.0;
+             smValid_ = false; periodValid_ = voiced_ = false; lastGoodP_ = 0.0; histN_ = 0; slope_ = 0.0; candN_ = 0;
+@@ -482,11 +502,20 @@
+         const int lat = zeroLat ? int(std::lround(0.0002 * sr_))
+                                 : int(std::lround(std::min(20.0, std::max(0.5, p.latencyMs)) * 1e-3 * sr_));
+         const int latC = std::max(int(kFloor) + 2, lat);
++        const bool delayChanged = latC != lat_;
+         reported_.store(zeroLat ? 0 : latC, std::memory_order_relaxed);
+         if (latC != lat_) {
+             lat_ = latC;
+-            actualDelaySamples_.store(lat_, std::memory_order_relaxed);
+             if (double(lat_) != home_) { home_ = double(lat_); forceHome_ = true; }
++        }
++        actualDelaySamples_.store(lat_, std::memory_order_relaxed);
++        if (modeChanged || delayChanged) {   // ratio slew into the shifter = a direct tracking lag on vibrato, so keep it short (Classic 1 ms, Crystal 2 ms,
++            // its jitter tolerance at note steps bottoms out there) while the audio is read close to "now"; once the
++            // delay reaches 5-10 ms the audio is far behind the estimate and the old 3 ms smoothing is better
++            const double homeMs = double(lat_) / sr_ * 1000.0;
++            const double bump = std::min(1.0, std::max(0.0, (homeMs - 5.0) * 0.2));
++            const double base = mode_ == 1 ? 0.002 : 0.001;
++            rCoef_ = 1.0 - std::exp(-1.0 / ((base + bump * (0.003 - base)) * sr_));
+         }
+     }
+ 
+@@ -541,18 +570,23 @@
+             const double lgMeas = std::log2(P);
+             // the analysis window is centred ~W/2 samples in the past: extrapolate
+             // the (smoothed) log-period slope to "now" so vibrato is tracked, not lagged
+-            if (mode_ == 1 && histN_ > 0 && std::fabs(lgMeas - lgHist_[(histPos_ - 1) & 7]) > 0.03) {
++            if (gate_ && histN_ > 0 && std::fabs(lgMeas - lgHist_[(histPos_ - 1) & 15]) > 0.03) {
+                 histN_ = 0; slope_ = 0.0;      // a note change or a junk frame is not vibrato: no lead until the history refills
+             }
+             if (histN_ >= slopeSpan_) {
+-                const double sl = (lgMeas - lgHist_[(histPos_ - slopeSpan_) & 7]) / double(slopeSpan_);   // oct / hop
++                const double sl = (lgMeas - lgHist_[(histPos_ - slopeSpan_) & 15]) / double(slopeSpan_);   // oct / hop
+                 // vibrato never exceeds ~2 oct/s; a note change slews at ~7: that is not something to extrapolate
+-                if (mode_ == 1 && std::fabs(sl) > 3.5 * dt) { histN_ = 0; slope_ = 0.0; }
++                if (gate_ && std::fabs(sl) > 3.5 * dt) { histN_ = 0; slope_ = 0.0; }
+                 else
+                 slope_ += 0.35 * (sl - slope_);
+             } else slope_ = 0.0;
+-            lgHist_[histPos_ & 7] = lgMeas; ++histPos_; ++histN_;
+-            const double leadHops = 0.5 * det_.lastWindow() / double(hop_);
++            lgHist_[histPos_ & 15] = lgMeas; ++histPos_; ++histN_;
++            // The estimate is ~2.5 periods + 0.8 ms old (measured: 17.5 ms @110 Hz, 10 ms @220, 4.3 ms @440, both modes), but the
++            // shifter reads audio from A_ ago, so only the difference has to be bridged. Classic also smooths the correction itself
++            // (about the retune time constant for short settings), which delays it further.
++            const double leadSamples = 2.5 * P + 0.0008 * sr_ - A_
++                                       + (mode_ == 0 ? 0.5 * std::min(params_.retuneMs, 10.0) * 1e-3 * sr_ : 0.0);
++            const double leadHops = leadSamples / double(hop_);
+             const double lead = std::min(0.03, std::max(-0.03, slope_ * leadHops));
+             const double lg = lgMeas + lead;
+             const int idx = table_.nearest(lg, prevIdx_, 0.015);
+@@ -672,7 +706,7 @@
+     // Crystal: 60 Hz high-pass (TDF-II biquad) feeding det_, raw window kept for detB_ fallback
+     std::vector<float> fmono_; double hb0_ = 1, hb1_ = 0, hb2_ = 0, ha1_ = 0, ha2_ = 0, hs1_ = 0, hs2_ = 0;
+     int mode_ = 0; bool smValid_ = false; double sm_ = 0.0, crystalAlpha_ = 0.5;
+-    int hopN_ = 128, hopC_ = 64, slopeSpan_ = 3, candN_ = 0; double candLg_ = 0.0;
++    bool gate_ = false; int hopN_ = 128, hopC_ = 64, slopeSpan_ = 3, candN_ = 0; double candLg_ = 0.0;
+     std::atomic<int> reported_ { 120 }, actualDelaySamples_ { 120 };
+     double enter_ = 0.55, exit_ = 0.40;
+     uint32_t tableKey_ = 0xffffffffu; double refKey_ = -1.0;
+@@ -686,7 +720,7 @@
+     double r_ = 1.0, rTarget_ = 1.0, rCoef_ = 0.0, eSm_ = 0.0, alpha_ = 1.0, unvAlpha_ = 0.1;
+     double Pcur_ = 0.0, lastGoodP_ = 0.0; bool periodValid_ = false, voiced_ = false;
+     int heldHops_ = 0, prevIdx_ = -1; bool forceHome_ = false;
+-    double lgHist_[8] {}, slope_ = 0.0; int histPos_ = 0, histN_ = 0;
++    double lgHist_[16] {}, slope_ = 0.0; int histPos_ = 0, histN_ = 0;
+     std::atomic<float> tInHz_ {0.f}, tTgtHz_ {0.f}, tCents_ {0.f}, tConf_ {0.f};
+     std::atomic<int> tNote_ {-1}; std::atomic<bool> tVoiced_ {false};
+ };
