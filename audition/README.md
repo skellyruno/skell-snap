@@ -1,0 +1,5 @@
+# DSP audition (2026-11-24)
+
+This draft PR builds a listening candidate from the recovered core at 7c5ff11b68a8e0767a6f64378a037b5adf21d50a. The patch applies only on this PR branch, after the original Classic and Crystal equivalence tests pass. The default/main build remains unchanged. The patch modifies only Source/dsp/SnapCore.h: high-register Classic detector fallback, latency-aware prediction, slope gating and ratio slew. Editor, artwork, parameter layout and latency selector are unchanged. Patch, baseline and candidate hashes are checked before building.
+
+The audition plugin retains the same plugin identity and can replace the installed version. Back up the working VST3 and test in a copy of an FL Studio project. Exact audio parity with old algorithms is intentionally not asserted for the candidate; the original compatibility gates still run on the untouched baseline. Windows workflow runs both updated modes at 0 and 2.5 ms, then the normal VST3 build, package verification and pluginval. Audition artifacts are named separately. No merge or production release is authorized. Real-vocal listening, state recall, CPU and actual UI inspection remain open.

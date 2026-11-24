@@ -24,6 +24,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Test strict VST3 moduleinfo JSON normalizer
+        run: python -m unittest discover -s tests -p "test_normalize_vst3_moduleinfo.py" -v
+
       - name: Reassemble and verify the source archive
         shell: pwsh
         run: |
@@ -52,6 +58,78 @@ jobs:
           }
           "SKELL_SNAP_SOURCE=$sourceRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
 
+      - name: Reassemble and verify the source overlay
+        shell: pwsh
+        run: |
+          $partRoot = Join-Path $PWD 'source-overlay/parts'
+          $parts = @(Get-ChildItem -LiteralPath $partRoot -Filter 'part-*.bin' -File | Sort-Object Name)
+          if ($parts.Count -ne 8) { throw "Expected 8 source overlay binary slots, found $($parts.Count)" }
+          $expectedNames = 1..8 | ForEach-Object { 'part-{0:D2}.bin' -f $_ }
+          for ($i = 0; $i -lt 8; $i++) {
+            if ($parts[$i].Name -ne $expectedNames[$i]) { throw "Unexpected source overlay slot: $($parts[$i].Name)" }
+          }
+          $overlayPath = Join-Path $PWD 'source-overlay.tar.gz'
+          $stream = [System.IO.File]::Open($overlayPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+          try {
+            for ($index = 1; $index -le 8; $index++) {
+              $partName = 'part-{0:D2}.bin' -f $index
+              if ($index -eq 6 -or $index -eq 8) {
+                $b64Name = 'part-{0:D2}.b64' -f $index
+                $b64Path = Join-Path $PWD ('source-overlay/parts-b64/' + $b64Name)
+                if (-not (Test-Path -LiteralPath $b64Path -PathType Leaf)) { throw "Missing verified base64 overlay fragment: $b64Name" }
+                $expectedB64Hash = if ($index -eq 6) { '4f990f29c3c90fa4a3cf642d2b66df6bf8d124218cee92bfe73568e7a532a4c3' } else { 'cdd519f9ef0955a06cd939e161006f3d76b2c392f5d808387c00ec80714a72dc' }
+                $actualB64Hash = (Get-FileHash -LiteralPath $b64Path -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($actualB64Hash -ne $expectedB64Hash) { throw "Base64 overlay fragment checksum mismatch for ${b64Name}: $actualB64Hash" }
+                $base64 = [System.IO.File]::ReadAllText($b64Path)
+                $bytes = [Convert]::FromBase64String($base64)
+                $expectedPartLength = if ($index -eq 6) { 4993 } else { 4992 }
+                if ($bytes.Length -ne $expectedPartLength) { throw "Decoded overlay fragment $b64Name has $($bytes.Length) bytes; expected $expectedPartLength" }
+              } else {
+                $bytes = [System.IO.File]::ReadAllBytes((Join-Path $partRoot $partName))
+              }
+              $stream.Write($bytes, 0, $bytes.Length)
+            }
+          }
+          finally { $stream.Dispose() }
+          $expectedLength = 39943
+          $actualLength = (Get-Item -LiteralPath $overlayPath).Length
+          if ($actualLength -ne $expectedLength) { throw "Source overlay length mismatch: expected $expectedLength, got $actualLength" }
+          $expectedSha256 = 'ce1f4c42e89d82d10241a97f0ccb002abc8cd6e88a9907fd8f6012c67a9d5a9f'
+          $actualSha256 = (Get-FileHash -LiteralPath $overlayPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $expectedSha256) { throw "Source overlay SHA-256 mismatch: expected $expectedSha256, got $actualSha256" }
+          tar -tzf $overlayPath | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Verified source overlay is not a readable gzip tar archive.' }
+          Write-Host "Source overlay reconstructed and SHA-256 verified: $actualSha256 ($actualLength bytes)"
+      - name: Apply updated audio-reactive UI/source overlay
+        shell: pwsh
+        run: |
+          $overlayRoot = Join-Path $PWD 'source-overlay'
+          New-Item -ItemType Directory -Path $overlayRoot -Force | Out-Null
+          tar -xzf (Join-Path $PWD 'source-overlay.tar.gz') -C $overlayRoot
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item -Path (Join-Path $overlayRoot 'Source/*') -Destination (Join-Path $env:SKELL_SNAP_SOURCE 'Source') -Recurse -Force
+          Copy-Item -LiteralPath (Join-Path $overlayRoot 'CMakeLists.txt') -Destination (Join-Path $env:SKELL_SNAP_SOURCE 'CMakeLists.txt') -Force
+          Copy-Item -Path (Join-Path $overlayRoot 'tests/*') -Destination (Join-Path $env:SKELL_SNAP_SOURCE 'tests') -Recurse -Force
+          if (-not (Test-Path (Join-Path $env:SKELL_SNAP_SOURCE 'Source/ui/RetuneScale.h'))) {
+            throw "The reversed Retune scale helper was not applied."
+          }
+
+      - name: Upload reconstructed source for local DSP/UI profiling
+        uses: actions/upload-artifact@v6
+        with:
+          name: Skell-Snap-Source-Recovery
+          path: ${{ env.SKELL_SNAP_SOURCE }}
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Verify original Zero-first five-choice latency selector
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File scripts/patch-skell-snap-latency-compat.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File scripts/patch-skell-snap-latency-compat.ps1 -SourceRoot $env:SKELL_SNAP_SOURCE
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Patch and test the extracted source program name
         shell: pwsh
         run: |
@@ -78,6 +156,52 @@ jobs:
           ctest --test-dir build-core -C Release --output-on-failure
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+
+      # Run original equivalence gates first; apply the audition patch only to this draft PR.
+      - name: Apply and verify DSP-only audition patch
+        if: ${{ github.event_name == 'pull_request' && github.head_ref == 'codex/skell-snap-zero-latency-crystal-compat-20261121' }}
+        shell: pwsh
+        run: |
+          $patch = Join-Path $env:RUNNER_TEMP 'skell-snap-dsp-only.patch'
+          $original = Join-Path $PWD 'audition/skell-snap-dsp-only.patch'
+          $patchText = [IO.File]::ReadAllText($original).Replace("`r`n", "`n")
+          [IO.File]::WriteAllText($patch, $patchText, [Text.UTF8Encoding]::new($false))
+          if ((Get-FileHash $patch -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'efa900f00f5f689b6f43f93e75e598d15917fc7f390201589e86ff6b006ed768') { throw 'Audition patch hash mismatch' }
+          $core = Join-Path $env:SKELL_SNAP_SOURCE 'Source/dsp/SnapCore.h'
+          if ((Get-FileHash $core -Algorithm SHA256).Hash.ToLowerInvariant() -ne '9bef538b0df377df49720bcd0fe8ae7c98f9d0a166e952ddc0023e430c3d9736') { throw 'Audition baseline core hash mismatch' }
+          git -c core.autocrlf=false -c core.eol=lf -C "$PWD" apply --check --directory=source/skell-snap "$patch"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -c core.autocrlf=false -c core.eol=lf -C "$PWD" apply --verbose --directory=source/skell-snap "$patch"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $actualCoreHash = (Get-FileHash $core -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "Audition core SHA256: $actualCoreHash"
+          if ($actualCoreHash -ne '2be1e3ebf58a2569756de678e58470d78cd101c8a66324617388e69e306a7541') { throw "Audition core hash mismatch: $actualCoreHash" }
+
+      - name: Build and test audition DSP in both modes at Zero and default latency
+        if: ${{ github.event_name == 'pull_request' && github.head_ref == 'codex/skell-snap-zero-latency-crystal-compat-20261121' }}
+        shell: pwsh
+        run: |
+          cmake --build build-core --config Release --target SnapCoreTests Snap_rune_motion_test Snap_rune_glyph_catalog_test Snap_ui_frame_pacer_test --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir build-core -C Release --output-on-failure -R '^(SnapCoreTests|Snap_rune_motion_test|Snap_rune_glyph_catalog_test|Snap_ui_frame_pacer_test)$'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $testExe = Join-Path $PWD 'build-core/Release/SnapCoreTests.exe'
+          & $testExe --quick --crystal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $testExe --quick --zero
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $testExe --quick --crystal --zero
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload audition source for debugging and provenance
+        if: ${{ github.event_name == 'pull_request' && github.head_ref == 'codex/skell-snap-zero-latency-crystal-compat-20261121' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: Skell-Snap-Audition-Source
+          path: ${{ env.SKELL_SNAP_SOURCE }}
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Configure JUCE VST3
         shell: pwsh
         run: |
@@ -91,11 +215,18 @@ jobs:
           cmake --build build --target SkellSnap_VST3 --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Normalize JUCE moduleinfo.json to strict host-readable JSON
+        shell: pwsh
+        run: |
+          $moduleinfo = Join-Path $PWD 'build/SkellSnap_artefacts/Release/VST3/Skell-Snap.vst3/Contents/Resources/moduleinfo.json'
+          python scripts/normalize_vst3_moduleinfo.py --path "$moduleinfo" --expected-name "Skell-Snap"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Verify VST3 bundle, moduleinfo, class IDs and AMD64 PE
         shell: pwsh
         run: |
           $vst3Root = Join-Path $PWD 'build/SkellSnap_artefacts/Release/VST3'
-          pwsh -NoProfile -File scripts/verify-vst3-bundle.ps1 -Vst3Root $vst3Root -ExpectedBundleName 'Skell-Snap.vst3' -CommitSha $env:GITHUB_SHA -SourceArchivePath 'source-archive/skell-snap-source.tar.gz' -SourceOverlayPath 'scripts/patch-skell-snap-program-name.ps1'
+          pwsh -NoProfile -File scripts/verify-vst3-bundle.ps1 -Vst3Root $vst3Root -ExpectedBundleName 'Skell-Snap.vst3' -CommitSha $env:GITHUB_SHA -SourceArchivePath 'source-archive/skell-snap-source.tar.gz' -SourceOverlayPath 'source-overlay.tar.gz'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Validate VST3 with pluginval
@@ -105,10 +236,67 @@ jobs:
           strictness-level: 5
           pluginval-version: v2.0.0-beta3
 
-      - name: Upload verified Windows x64 VST3
+      - name: Create and inspect install-ready Windows ZIP
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $vst3Root = Join-Path $PWD 'build/SkellSnap_artefacts/Release/VST3'
+          $bundle = Join-Path $vst3Root 'Skell-Snap.vst3'
+          if (-not (Test-Path -LiteralPath $bundle -PathType Container)) {
+            throw "The built VST3 bundle is missing: $bundle"
+          }
+
+          $stage = Join-Path $env:RUNNER_TEMP 'Skell-Snap-Windows-Installer'
+          if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          Copy-Item -LiteralPath $bundle -Destination $stage -Recurse -Force
+          Copy-Item -LiteralPath (Join-Path $PWD 'Install-Skell-Snap.bat') -Destination $stage
+          Copy-Item -LiteralPath (Join-Path $PWD 'README-INSTALL.txt') -Destination $stage
+          if ($env:GITHUB_EVENT_NAME -eq 'pull_request' -and $env:GITHUB_HEAD_REF -eq 'codex/skell-snap-zero-latency-crystal-compat-20261121') {
+            Add-Content -LiteralPath (Join-Path $stage 'README-INSTALL.txt') -Value "`nEXPERIMENTAL DSP AUDITION: Classic and Crystal audio behavior differs from the previous build. Back up the installed VST3 and existing projects before testing. Not a stable release. Commit: $env:GITHUB_SHA"
+          }
+
+          $zipPath = Join-Path $PWD 'Skell-Snap-Windows-Installer.zip'
+          if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+          [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            $stage,
+            $zipPath,
+            [System.IO.Compression.CompressionLevel]::Optimal,
+            $false
+          )
+
+          $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+          try {
+            $entries = @($zip.Entries | ForEach-Object { $_.FullName })
+          }
+          finally { $zip.Dispose() }
+
+          $requiredEntries = @(
+            'Skell-Snap.vst3/Contents/Resources/moduleinfo.json',
+            'Skell-Snap.vst3/Contents/x86_64-win/Skell-Snap.vst3',
+            'Install-Skell-Snap.bat',
+            'README-INSTALL.txt'
+          )
+          foreach ($entry in $requiredEntries) {
+            if ($entries -notcontains $entry) {
+              throw "Installer ZIP is malformed; required entry is missing: $entry"
+            }
+          }
+          $zipHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "Verified installer ZIP: $zipPath ($((Get-Item $zipPath).Length) bytes), SHA-256 $zipHash"
+
+      - name: Upload verified Windows x64 VST3 bundle
         uses: actions/upload-artifact@v6
         with:
-          name: Skell-Snap-Windows-x64-VST3
+          name: ${{ (github.event_name == 'pull_request' && github.head_ref == 'codex/skell-snap-zero-latency-crystal-compat-20261121') && 'Skell-Snap-Audition-Windows-x64-VST3' || 'Skell-Snap-Windows-x64-VST3' }}
           path: build/SkellSnap_artefacts/Release/VST3/Skell-Snap.vst3
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload install-ready Windows ZIP
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ (github.event_name == 'pull_request' && github.head_ref == 'codex/skell-snap-zero-latency-crystal-compat-20261121') && 'Skell-Snap-Audition-Windows-Installer' || 'Skell-Snap-Windows-Installer' }}
+          path: Skell-Snap-Windows-Installer.zip
           if-no-files-found: error
           retention-days: 30
