@@ -169,11 +169,13 @@ jobs:
           if ((Get-FileHash $patch -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'efa900f00f5f689b6f43f93e75e598d15917fc7f390201589e86ff6b006ed768') { throw 'Audition patch hash mismatch' }
           $core = Join-Path $env:SKELL_SNAP_SOURCE 'Source/dsp/SnapCore.h'
           if ((Get-FileHash $core -Algorithm SHA256).Hash.ToLowerInvariant() -ne '9bef538b0df377df49720bcd0fe8ae7c98f9d0a166e952ddc0023e430c3d9736') { throw 'Audition baseline core hash mismatch' }
-          git -C "$env:SKELL_SNAP_SOURCE" apply --check "$patch"
+          git -c core.autocrlf=false -c core.eol=lf -C "$PWD" apply --check --directory=source/skell-snap "$patch"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git -C "$env:SKELL_SNAP_SOURCE" apply "$patch"
+          git -c core.autocrlf=false -c core.eol=lf -C "$PWD" apply --verbose --directory=source/skell-snap "$patch"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if ((Get-FileHash $core -Algorithm SHA256).Hash.ToLowerInvariant() -ne '2be1e3ebf58a2569756de678e58470d78cd101c8a66324617388e69e306a7541') { throw 'Audition core hash mismatch' }
+          $actualCoreHash = (Get-FileHash $core -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "Audition core SHA256: $actualCoreHash"
+          if ($actualCoreHash -ne '2be1e3ebf58a2569756de678e58470d78cd101c8a66324617388e69e306a7541') { throw "Audition core hash mismatch: $actualCoreHash" }
 
       - name: Build and test audition DSP in both modes at Zero and default latency
         if: ${{ github.event_name == 'pull_request' && github.head_ref == 'codex/skell-snap-zero-latency-crystal-compat-20261121' }}
